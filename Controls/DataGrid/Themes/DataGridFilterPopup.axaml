@@ -1,0 +1,127 @@
+﻿<Styles
+    xmlns="https://github.com/avaloniaui"
+    xmlns:atom="https://atomui.net"
+    xmlns:minidg="clr-namespace:PatChes.Controls.DataGrid"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+
+    <Styles.Resources>
+        <SolidColorBrush Color="#EEEEF0" x:Key="SeparatorBrush" />
+        <SolidColorBrush Color="#F0F2F5" x:Key="SortBtnBg" />
+        <SolidColorBrush Color="#D8DCE2" x:Key="SortBtnBorder" />
+        <SolidColorBrush Color="#E4E8EE" x:Key="SortBtnHoverBg" />
+        <SolidColorBrush Color="#3B82F6" x:Key="AccentBlue" />
+        <SolidColorBrush Color="#3B82F6" x:Key="CheckBg" />
+        <SolidColorBrush Color="#F0F4FA" x:Key="ItemHoverBg" />
+        <SolidColorBrush Color="#1E293B" x:Key="TextPrimary" />
+        <SolidColorBrush Color="#64748B" x:Key="TextSecondary" />
+        <SolidColorBrush Color="#94A3B8" x:Key="TextPlaceholder" />
+        <SolidColorBrush Color="#F8FAFC" x:Key="ClearBtnBg" />
+        <SolidColorBrush Color="#E2E8F0" x:Key="ClearBtnBorder" />
+        <SolidColorBrush Color="#D1D5DB" x:Key="ScrollThumbBg" />
+        <SolidColorBrush Color="#9CA3AF" x:Key="ScrollThumbHoverBg" />
+
+        <ControlTheme TargetType="minidg:DataGridFilterPopup" x:Key="{x:Type minidg:DataGridFilterPopup}">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="MinWidth" Value="240" />
+            <Setter Property="MaxWidth" Value="320" />
+            <Setter Property="Template">
+                <ControlTemplate>
+                    <Border Background="White" ClipToBounds="True">
+                        <StackPanel Spacing="0">
+
+                            <atom:LineEdit
+                                FontSize="13"
+                                Margin="10,10,10,8"
+                                MinHeight="32"
+                                PlaceholderText="搜索..."
+                                x:Name="PART_SearchBox" />
+
+                            <StackPanel
+                                Margin="12,0,12,8"
+                                Orientation="Horizontal"
+                                Spacing="6">
+                                <atom:Button
+                                    ButtonType="Default"
+                                    Content="↑ A-Z"
+                                    FontSize="12"
+                                    Height="26"
+                                    MinWidth="60"
+                                    SizeType="Small"
+                                    x:Name="PART_SortAsc" />
+                                <atom:Button
+                                    ButtonType="Default"
+                                    Content="↓ Z-A"
+                                    FontSize="12"
+                                    Height="26"
+                                    MinWidth="60"
+                                    SizeType="Small"
+                                    x:Name="PART_SortDesc" />
+                            </StackPanel>
+
+                            <Border
+                                Background="{StaticResource SeparatorBrush}"
+                                Height="1"
+                                Margin="12,0" />
+
+                            <atom:CheckBox
+                                Content="全选"
+                                FontSize="13"
+                                FontWeight="SemiBold"
+                                Foreground="{StaticResource TextPrimary}"
+                                IsThreeState="True"
+                                Margin="20,3,8,3"
+                                x:Name="PART_SelectAllCheckBox" />
+
+                            <Border
+                                Background="{StaticResource SeparatorBrush}"
+                                Height="1"
+                                Margin="12,0" />
+
+                            <atom:ListBox
+                                IsBorderless="True"
+                                IsSelectable="False"
+                                Margin="4,2,4,2"
+                                MaxHeight="260"
+                                Padding="0"
+                                ScrollViewer.HorizontalScrollBarVisibility="Auto"
+                                ScrollViewer.VerticalScrollBarVisibility="Auto"
+                                x:Name="PART_FilterList">
+                                <atom:ListBox.ItemTemplate>
+                                    <DataTemplate>
+                                        <ContentPresenter Content="{Binding}" />
+                                    </DataTemplate>
+                                </atom:ListBox.ItemTemplate>
+                            </atom:ListBox>
+
+                            <Border
+                                Background="{StaticResource SeparatorBrush}"
+                                Height="1"
+                                Margin="12,0" />
+
+                            <StackPanel
+                                HorizontalAlignment="Right"
+                                Margin="12,8,12,12"
+                                Orientation="Horizontal"
+                                Spacing="10">
+                                <atom:Button
+                                    ButtonType="Default"
+                                    Content="清除筛选"
+                                    FontSize="13"
+                                    SizeType="Small"
+                                    x:Name="PART_ClearBtn" />
+                                <atom:Button
+                                    ButtonType="Primary"
+                                    Content="确定"
+                                    FontSize="13"
+                                    SizeType="Small"
+                                    x:Name="PART_OkBtn" />
+                            </StackPanel>
+
+                        </StackPanel>
+                    </Border>
+                </ControlTemplate>
+            </Setter>
+        </ControlTheme>
+    </Styles.Resources>
+
+</Styles>

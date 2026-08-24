@@ -1,0 +1,37 @@
+﻿<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:atom="https://atomui.net"
+             x:Class="PdfViewerControl.Controls.PdfViewer"
+             Background="#FFF3F4F6">
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+        <Border Grid.Row="0" Background="White" BorderBrush="#FFE5E7EB" BorderThickness="0,0,0,1" Padding="8,6">
+            <WrapPanel VerticalAlignment="Center">
+                <atom:Button x:Name="PrevPageButton" Content="上一页" Width="72" Margin="0,0,4,0" Click="PrevPage_OnClick" />
+                <TextBlock x:Name="PageInfoText" VerticalAlignment="Center" Margin="4,0" Text="0 / 0" />
+                <atom:Button x:Name="NextPageButton" Content="下一页" Width="72" Margin="4,0,16,0" Click="NextPage_OnClick" />
+                <TextBlock Text="缩放：" VerticalAlignment="Center" Margin="0,0,4,0" />
+                <Slider x:Name="ZoomSlider" Width="160" Minimum="25" Maximum="400" Value="100" ValueChanged="ZoomSlider_OnValueChanged" />
+                <TextBlock x:Name="ZoomLabel" VerticalAlignment="Center" Margin="4,0,0,0" Text="100%" />
+            </WrapPanel>
+        </Border>
+        <ScrollViewer x:Name="MainScrollViewer" Grid.Row="1" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" ScrollChanged="MainScrollViewer_OnScrollChanged" PointerPressed="ScrollViewer_OnBackgroundClick">
+            <StackPanel x:Name="PagesPanel" HorizontalAlignment="Center" Margin="16" />
+        </ScrollViewer>
+        <Border Grid.Row="2" Background="#FFF9FAFB" BorderBrush="#FFE5E7EB" BorderThickness="0,1,0,0" Padding="8,4">
+            <TextBlock x:Name="StatusText" Foreground="#FF6B7280" Text="请打开 PDF 文件" />
+        </Border>
+        <Grid Grid.Row="0" Grid.RowSpan="3" x:Name="LoadingOverlay" IsVisible="False" Background="#A6FFFFFF">
+            <Border HorizontalAlignment="Center" VerticalAlignment="Center" Background="White" CornerRadius="8" Padding="28,20" BorderBrush="#FFE5E7EB" BorderThickness="1">
+                <StackPanel HorizontalAlignment="Center" Spacing="12">
+                    <ProgressBar IsIndeterminate="True" Width="200" Height="4" />
+                    <TextBlock x:Name="LoadingText" Text="正在加载 PDF…" HorizontalAlignment="Center" Foreground="#FF6B7280" FontSize="13" />
+                </StackPanel>
+            </Border>
+        </Grid>
+    </Grid>
+</UserControl>

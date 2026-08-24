@@ -1,0 +1,79 @@
+﻿<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             x:Class="PdfViewerControl.Controls.FreeTextAnnotationControl"
+             Background="Transparent"
+             ClipToBounds="False"
+             UseLayoutRounding="False">
+    <UserControl.ContextMenu>
+        <ContextMenu>
+            <MenuItem Header="Border">
+                <MenuItem x:Name="BorderSolidMenuItem" Header="Solid" ToggleType="CheckBox" Click="BorderSolidMenuItem_OnClick" />
+                <MenuItem x:Name="BorderDashedMenuItem" Header="Dashed" ToggleType="CheckBox" Click="BorderDashedMenuItem_OnClick" />
+            </MenuItem>
+            <MenuItem Header="Align">
+                <MenuItem x:Name="AlignHLeftMenuItem" Header="Left" ToggleType="CheckBox" Click="AlignHLeftMenuItem_OnClick" />
+                <MenuItem x:Name="AlignHCenterMenuItem" Header="Center" ToggleType="CheckBox" Click="AlignHCenterMenuItem_OnClick" />
+                <MenuItem x:Name="AlignHRightMenuItem" Header="Right" ToggleType="CheckBox" Click="AlignHRightMenuItem_OnClick" />
+                <Separator />
+                <MenuItem x:Name="AlignVTopMenuItem" Header="Top" ToggleType="CheckBox" Click="AlignVTopMenuItem_OnClick" />
+                <MenuItem x:Name="AlignVCenterMenuItem" Header="Middle" ToggleType="CheckBox" Click="AlignVCenterMenuItem_OnClick" />
+                <MenuItem x:Name="AlignVBottomMenuItem" Header="Bottom" ToggleType="CheckBox" Click="AlignVBottomMenuItem_OnClick" />
+            </MenuItem>
+            <MenuItem Header="Background">
+                <MenuItem x:Name="BgYellowMenuItem" Header="Yellow" Click="BgYellowMenuItem_OnClick" />
+                <MenuItem x:Name="BgGreenMenuItem" Header="Green" Click="BgGreenMenuItem_OnClick" />
+                <MenuItem x:Name="BgRedMenuItem" Header="Red" Click="BgRedMenuItem_OnClick" />
+                <MenuItem x:Name="BgBlueMenuItem" Header="Blue" Click="BgBlueMenuItem_OnClick" />
+                <MenuItem x:Name="BgWhiteMenuItem" Header="White" Click="BgWhiteMenuItem_OnClick" />
+            </MenuItem>
+            <MenuItem Header="Font">
+                <MenuItem x:Name="FontSize10MenuItem" Header="10" Click="FontSizeMenuItem_OnClick" Tag="10" />
+                <MenuItem x:Name="FontSize12MenuItem" Header="12" Click="FontSizeMenuItem_OnClick" Tag="12" />
+                <MenuItem x:Name="FontSize14MenuItem" Header="14" Click="FontSizeMenuItem_OnClick" Tag="14" />
+                <MenuItem x:Name="FontSize16MenuItem" Header="16" Click="FontSizeMenuItem_OnClick" Tag="16" />
+                <MenuItem x:Name="FontSize20MenuItem" Header="20" Click="FontSizeMenuItem_OnClick" Tag="20" />
+                <MenuItem x:Name="FontSize24MenuItem" Header="24" Click="FontSizeMenuItem_OnClick" Tag="24" />
+                <Separator />
+                <MenuItem x:Name="BoldMenuItem" Header="Bold" ToggleType="CheckBox" Click="BoldMenuItem_OnClick" />
+            </MenuItem>
+            <Separator />
+            <MenuItem Header="Delete" Click="DeleteMenuItem_OnClick" />
+        </ContextMenu>
+    </UserControl.ContextMenu>
+    <UserControl.Styles>
+        <Style Selector="TextBox#Editor">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="BorderBrush" Value="Transparent" />
+            <Setter Property="BorderThickness" Value="0" />
+            <Setter Property="Padding" Value="0" />
+            <Setter Property="CaretBrush" Value="Black" />
+        </Style>
+        <Style Selector="TextBox#Editor:focus, TextBox#Editor:pointerover, TextBox#Editor:focus-within">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="BorderBrush" Value="Transparent" />
+            <Setter Property="BorderThickness" Value="0" />
+        </Style>
+        <Style Selector="TextBox#Editor /template/ Border#PART_BorderElement">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="BorderBrush" Value="Transparent" />
+            <Setter Property="BorderThickness" Value="0" />
+            <Setter Property="BoxShadow" Value="none" />
+        </Style>
+        <Style Selector="TextBox#Editor:focus /template/ Border#PART_BorderElement, TextBox#Editor:pointerover /template/ Border#PART_BorderElement, TextBox#Editor:focus-within /template/ Border#PART_BorderElement">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="BorderBrush" Value="Transparent" />
+            <Setter Property="BorderThickness" Value="0" />
+            <Setter Property="BoxShadow" Value="none" />
+        </Style>
+    </UserControl.Styles>
+    <Grid x:Name="Root" ClipToBounds="False">
+        <Border x:Name="Chrome" BorderBrush="Black" BorderThickness="1" Background="#FF87CEEB" Padding="3,2" ClipToBounds="False">
+            <Panel>
+                <TextBlock x:Name="Placeholder" Text="Insert text here" Foreground="#FFB45309" FontSize="14" FontFamily="Arial" VerticalAlignment="Top" HorizontalAlignment="Left" IsHitTestVisible="False" IsVisible="False" />
+                <TextBox x:Name="Editor" BorderThickness="0" Background="Transparent" Padding="0" MinHeight="0" MinWidth="0" AcceptsReturn="True" TextWrapping="Wrap" ScrollViewer.VerticalScrollBarVisibility="Hidden" FontSize="14" FontFamily="Arial" Foreground="Black" CaretBrush="Black" />
+            </Panel>
+        </Border>
+        <Rectangle x:Name="DashedBorderFrame" Stroke="Black" StrokeThickness="1" StrokeDashArray="2,2" Fill="Transparent" IsHitTestVisible="False" IsVisible="False" HorizontalAlignment="Stretch" VerticalAlignment="Stretch" />
+        <Border x:Name="DragOverlay" Background="Transparent" IsVisible="True" Cursor="SizeAll" ClipToBounds="False" />
+    </Grid>
+</UserControl>

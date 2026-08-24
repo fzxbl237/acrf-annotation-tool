@@ -1,0 +1,34 @@
+<Styles xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <Styles.Resources>
+
+        <!-- DataValidationErrors theme: show content but suppress error text and border -->
+        <ControlTheme TargetType="DataValidationErrors" x:Key="MiniDataGridValidationErrorsTheme">
+            <Setter Property="Template">
+                <ControlTemplate TargetType="DataValidationErrors">
+                    <ContentPresenter Content="{TemplateBinding Content}" />
+                </ControlTemplate>
+            </Setter>
+        </ControlTheme>
+
+    </Styles.Resources>
+
+    <!-- TextBox editing: suppress :error red border + DataValidationErrors -->
+    <Style Selector="TextBox.mini-editing-textbox:error /template/ Border#PART_BorderElement">
+        <Setter Property="BorderBrush" Value="#0078D4" />
+        <Setter Property="BorderThickness" Value="2" />
+    </Style>
+    <Style Selector="TextBox.mini-editing-textbox /template/ DataValidationErrors">
+        <Setter Property="Theme" Value="{StaticResource MiniDataGridValidationErrorsTheme}" />
+    </Style>
+
+    <!-- ComboBox editing: suppress DataValidationErrors that offset popup -->
+    <Style Selector="ComboBox.mini-editing-combobox:error /template/ Border#PART_BorderElement">
+        <Setter Property="BorderBrush" Value="#0078D4" />
+        <Setter Property="BorderThickness" Value="2" />
+    </Style>
+    <Style Selector="ComboBox.mini-editing-combobox /template/ DataValidationErrors">
+        <Setter Property="Theme" Value="{StaticResource MiniDataGridValidationErrorsTheme}" />
+    </Style>
+
+</Styles>

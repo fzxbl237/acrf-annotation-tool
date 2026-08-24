@@ -1,0 +1,11 @@
+﻿<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:AcrfAnnotationTool.ViewModels.Documents"
+             xmlns:pdf="using:PdfViewerControl.Controls"
+             x:Class="AcrfAnnotationTool.Views.PdfToolView"
+             x:DataType="vm:AcrfDocumentViewModel"
+             x:CompileBindings="True">
+  <Border Background="White" BorderBrush="#FFE5E7EB" BorderThickness="1" CornerRadius="4">
+    <pdf:PdfViewer x:Name="PdfViewer" />
+  </Border>
+</UserControl>

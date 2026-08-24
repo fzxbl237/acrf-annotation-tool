@@ -1,0 +1,53 @@
+﻿<Application xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:local="using:AcrfAnnotationTool"
+             xmlns:core="using:Dock.Model.Core"
+             xmlns:recycling="using:Avalonia.Controls.Recycling"
+             x:Class="AcrfAnnotationTool.App">
+  <Application.DataTemplates>
+    <local:ViewLocator />
+  </Application.DataTemplates>
+
+  <Application.Resources>
+    <ResourceDictionary>
+      <recycling:ControlRecycling x:Key="ControlRecyclingKey" TryToUseIdAsKey="True" />
+      <ResourceDictionary.MergedDictionaries>
+        <ResourceInclude Source="avares://Dock.Avalonia.Themes.Fluent/Presets/Ide/Default.axaml" />
+        <ResourceDictionary>
+          <ResourceDictionary.ThemeDictionaries>
+            <ResourceDictionary x:Key="Default">
+              <Color x:Key="RegionColor">#FFFAFAFA</Color>
+              <Color x:Key="AcrylicFallbackColor">#FFE2E2E2</Color>
+            </ResourceDictionary>
+            <ResourceDictionary x:Key="Dark">
+              <Color x:Key="RegionColor">#FF212121</Color>
+              <Color x:Key="AcrylicFallbackColor">#FF1F1F1F</Color>
+            </ResourceDictionary>
+          </ResourceDictionary.ThemeDictionaries>
+        </ResourceDictionary>
+      </ResourceDictionary.MergedDictionaries>
+    </ResourceDictionary>
+  </Application.Resources>
+
+  <Application.Styles>
+    <FluentTheme />
+    <DockFluentTheme DensityStyle="Normal" />
+    <Style Selector="DockControl">
+      <Setter Property="(recycling:ControlRecyclingDataTemplate.ControlRecycling)" Value="{StaticResource ControlRecyclingKey}" />
+    </Style>
+    <Style Selector="DocumentControl">
+      <Setter Property="HeaderTemplate">
+        <DataTemplate DataType="core:IDockable">
+          <TextBlock Text="{Binding Title}" Padding="4,0" />
+        </DataTemplate>
+      </Setter>
+    </Style>
+    <Style Selector="ToolControl">
+      <Setter Property="HeaderTemplate">
+        <DataTemplate DataType="core:IDockable">
+          <TextBlock Text="{Binding Title}" Padding="4,0" />
+        </DataTemplate>
+      </Setter>
+    </Style>
+  </Application.Styles>
+</Application>

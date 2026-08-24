@@ -1,0 +1,110 @@
+﻿<UserControl
+    x:Class="AcrfAnnotationTool.Views.AnnotationToolView"
+    x:CompileBindings="True"
+    x:DataType="vm:AcrfDocumentViewModel"
+    xmlns="https://github.com/avaloniaui"
+    xmlns:atom="https://atomui.net"
+    xmlns:dg="using:PatChes.Controls.DataGrid"
+    xmlns:vm="using:AcrfAnnotationTool.ViewModels.Documents"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <Panel>
+        <Border
+            Background="White"
+            BorderBrush="#FFE5E7EB"
+            BorderThickness="1"
+            CornerRadius="4">
+            <dg:DataGrid
+                ColumnHeaderHeight="34"
+                GridLinesVisibility="Both"
+                IsSearchBarVisible="True"
+                ItemsSource="{Binding Annotations}"
+                RowHeight="32"
+                SelectedItem="{Binding SelectedItem, Mode=TwoWay}"
+                SelectionUnit="FullRow"
+                x:Name="AnnotationGrid">
+                <dg:DataGrid.Columns>
+                    <dg:DataGridTextColumn
+                        Binding="{Binding FormName}"
+                        Header="Form名称"
+                        IsFrozen="True"
+                        MinWidth="150"
+                        Width="1*" />
+                    <dg:DataGridNumericUpDownColumn
+                        Binding="{Binding PageNum}"
+                        Header="页码"
+                        IsReadOnly="True"
+                        MinWidth="60"
+                        Width="80" />
+                    <dg:DataGridTextColumn
+                        Binding="{Binding VarName}"
+                        Header="变量名称"
+                        MinWidth="120"
+                        ShowToolTip="True"
+                        Width="1*" />
+                    <dg:DataGridTextColumn
+                        Binding="{Binding Text}"
+                        Header="CRF文本"
+                        MinWidth="180"
+                        ShowToolTip="True"
+                        Width="2*" />
+                    <dg:DataGridTextColumn
+                        Binding="{Binding AnnotationText}"
+                        Header="注释文本"
+                        MinWidth="180"
+                        ShowToolTip="True"
+                        Width="2*" />
+                    <dg:DataGridTextColumn
+                        Binding="{Binding AnnotationTextDomain}"
+                        Header="所属域"
+                        Width="120" />
+                    <dg:DataGridCheckBoxColumn
+                        Binding="{Binding AnnotationDotted}"
+                        Header="虚线框"
+                        Width="90" />
+                    <dg:DataGridNumericUpDownColumn
+                        Binding="{Binding X}"
+                        Header="X"
+                        Width="80" />
+                    <dg:DataGridNumericUpDownColumn
+                        Binding="{Binding Y}"
+                        Header="Y"
+                        Width="80" />
+                    <dg:DataGridNumericUpDownColumn
+                        Binding="{Binding Width}"
+                        Header="宽度"
+                        Minimum="0"
+                        Width="80" />
+                    <dg:DataGridNumericUpDownColumn
+                        Binding="{Binding Line}"
+                        Header="行数"
+                        Minimum="1"
+                        Width="80" />
+                </dg:DataGrid.Columns>
+            </dg:DataGrid>
+        </Border>
+
+        <atom:Dialog
+            ButtonClicked="OnCoordinateDialogButtonClicked"
+            DefaultStandardButton="Ok"
+            HostMinWidth="320"
+            IsDragMovable="True"
+            IsModal="True"
+            StandardButtons="Cancel,Ok"
+            x:Name="CoordinateDialog">
+            <StackPanel Spacing="8">
+                <TextBlock Text="请输入整数偏移量：" />
+                <atom:NumericUpDown
+                    Increment="1"
+                    Maximum="100"
+                    Minimum="-100"
+                    Value="0"
+                    Width="100"
+                    x:Name="CoordinateOffsetInput" />
+                <TextBlock
+                    Foreground="#FFB91C1C"
+                    IsVisible="False"
+                    x:Name="CoordinateErrorText" />
+            </StackPanel>
+        </atom:Dialog>
+    </Panel>
+</UserControl>

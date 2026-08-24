@@ -1,0 +1,137 @@
+﻿using Avalonia;
+using Avalonia.Controls;
+using Avalonia.Controls.Shapes;
+using Avalonia.Media;
+using System.Collections.Generic;
+using PdfViewerControl.Controls;
+
+namespace PdfViewerControl.Controls.Annotation;
+
+internal static class AnnotationAdornerService
+{
+    private static readonly Dictionary<FreeTextAnnotationControl, AnnotationOverlay> _overlays = new();
+    private static readonly Dictionary<FreeTextAnnotationControl, bool> _pointerOver = new();
+
+    public static void SetSelected(FreeTextAnnotationControl c, bool s) { if (s) EnsureVisible(c); else Hide(c); }
+    public static void UpdateAdornerState(FreeTextAnnotationControl c) { if (c.IsSelected || _pointerOver.GetValueOrDefault(c)) EnsureVisible(c); else Hide(c); }
+    public static void SetPointerOver(FreeTextAnnotationControl c, bool o) { _pointerOver[c] = o; UpdateAdornerState(c); }
+    public static void Refresh(FreeTextAnnotationControl c) { if (c.IsSelected) EnsureVisible(c); }
+    public static void RebindSelectedAdorner(FreeTextAnnotationControl c) => Refresh(c);
+    public static void SyncAdornerLayerPosition(FreeTextAnnotationControl c) { if (_overlays.TryGetValue(c, out var o)) o.UpdatePosition(c); }
+    public static void SyncAdornerPosition(FreeTextAnnotationControl c) { if (_overlays.TryGetValue(c, out var o)) o.UpdatePosition(c); }
+
+    public static Size GetAnnotationSize(FreeTextAnnotationControl ann)
+    {
+        var w = double.IsFinite(ann.Width) && ann.Width > 0 ? ann.Width : ann.Bounds.Width;
+        var h = double.IsFinite(ann.Height) && ann.Height > 0 ? ann.Height : ann.Bounds.Height;
+        return new Size(Math.Max(0, w), Math.Max(0, h));
+    }
+
+    public static AnnotationResizeHandleKind? TryGetResizeHandle(FreeTextAnnotationControl ann, Point canvasPoint)
+    {
+        var left = Canvas.GetLeft(ann); var top = Canvas.GetTop(ann);
+        if (double.IsNaN(left)) left = 0; if (double.IsNaN(top)) top = 0;
+        var size = GetAnnotationSize(ann);
+        return AnnotationHandleGeometry.TryHit(left, top, size.Width, size.Height, canvasPoint, out var kind) ? kind : null;
+    }
+
+    /// <summary>Find the annotation whose body contains the given canvas point (ignoring resize handles).</summary>
+    public static FreeTextAnnotationControl? FindAnnotationAtPoint(PageAnnotationCanvas canvas, Point pos)
+    {
+        foreach (var c in canvas.Children.OfType<FreeTextAnnotationControl>())
+        {
+            if (c.IsInEditMode) continue;
+            var left = Canvas.GetLeft(c); var top = Canvas.GetTop(c);
+            if (double.IsNaN(left)) left = 0; if (double.IsNaN(top)) top = 0;
+            var size = GetAnnotationSize(c);
+            var w = size.Width;
+            var h = size.Height;
+            if (w > 0 && h > 0 && pos.X >= left && pos.X <= left + w && pos.Y >= top && pos.Y <= top + h)
+                return c;
+        }
+        return null;
+    }
+
+    private static void EnsureVisible(FreeTextAnnotationControl c)
+    {
+        if (!c.IsLoaded) { c.AttachedToVisualTree += (_, _) => { if (c.IsSelected || _pointerOver.GetValueOrDefault(c)) TryCreate(c); }; return; }
+        TryCreate(c);
+    }
+
+    private static void TryCreate(FreeTextAnnotationControl c)
+    {
+        if (c.Parent is not Canvas parent) return;
+        if (_overlays.TryGetValue(c, out var ex)) { ex.UpdatePosition(c); return; }
+        var o = new AnnotationOverlay(); parent.Children.Add(o); _overlays[c] = o; o.UpdatePosition(c);
+    }
+
+    private static void Hide(FreeTextAnnotationControl c)
+    {
+        if (_overlays.TryGetValue(c, out var o))
+        {
+            if (o.Parent is Canvas p)
+            {
+                try { p.Children.Remove(o); } catch (InvalidOperationException) { }
+            }
+            _overlays.Remove(c);
+        }
+    }
+
+    /// <summary>Clear all overlay references without modifying visual tree (safe to call during detach).</summary>
+    public static void CleanupAll()
+    {
+        _overlays.Clear();
+        _pointerOver.Clear();
+    }
+}
+
+internal sealed class AnnotationOverlay : Canvas
+{
+    private readonly Border _selBorder;
+    private readonly Ellipse[] _handles = new Ellipse[8];
+    private const double HandleDiameter = 12;
+    private const double SelectionGap = 4;
+    private const double MarginOutside = 2;
+
+    public AnnotationOverlay()
+    {
+        IsHitTestVisible = false; Background = Brushes.Transparent; ClipToBounds = false;
+        _selBorder = new Border
+        {
+            BorderBrush = new SolidColorBrush(Color.Parse("#FF4A83C4")),
+            BorderThickness = new Thickness(1),
+            Background = Brushes.Transparent,
+            IsHitTestVisible = false
+        };
+        Children.Add(_selBorder);
+        for (int i = 0; i < 8; i++)
+        {
+            var e = new Ellipse
+            {
+                Width = HandleDiameter, Height = HandleDiameter,
+                Fill = new SolidColorBrush(Color.Parse("#FF4A83C4")),
+                Stroke = Brushes.White, StrokeThickness = 2,
+                IsHitTestVisible = false
+            };
+            _handles[i] = e;
+            Children.Add(e);
+        }
+    }
+
+    public void UpdatePosition(FreeTextAnnotationControl c)
+    {
+        var left = Canvas.GetLeft(c); var top = Canvas.GetTop(c);
+        if (double.IsNaN(left)) left = 0; if (double.IsNaN(top)) top = 0;
+        var size = AnnotationAdornerService.GetAnnotationSize(c);
+        var w = size.Width;
+        var h = size.Height;
+        Canvas.SetLeft(this, left); Canvas.SetTop(this, top);
+        Canvas.SetLeft(_selBorder, -SelectionGap); Canvas.SetTop(_selBorder, -SelectionGap);
+        _selBorder.Width = w + SelectionGap * 2; _selBorder.Height = h + SelectionGap * 2;
+        double ho = SelectionGap + MarginOutside, r = HandleDiameter / 2;
+        void Sh(int i, double x, double y) { Canvas.SetLeft(_handles[i], x); Canvas.SetTop(_handles[i], y); }
+        Sh(0, -ho - r, -ho - r); Sh(1, w / 2 - r, -ho - r); Sh(2, w + ho - r, -ho - r);
+        Sh(3, w + ho - r, h / 2 - r); Sh(4, w + ho - r, h + ho - r); Sh(5, w / 2 - r, h + ho - r);
+        Sh(6, -ho - r, h + ho - r); Sh(7, -ho - r, h / 2 - r);
+    }
+}

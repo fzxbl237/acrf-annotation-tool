@@ -1,0 +1,25 @@
+﻿<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:AcrfAnnotationTool.ViewModels"
+             x:Class="AcrfAnnotationTool.Views.MainView"
+             x:DataType="vm:MainWindowViewModel"
+             x:CompileBindings="True">
+  <Grid RowDefinitions="Auto,*,Auto" Background="#FFF3F4F6">
+    <Border Grid.Row="0" Background="White" Padding="14,8" BorderBrush="#FFE5E7EB" BorderThickness="0,0,0,1">
+      <StackPanel Orientation="Horizontal" Spacing="8">
+        <TextBlock Text="ACRF 注释工具" FontSize="17" FontWeight="SemiBold" VerticalAlignment="Center" />
+        <TextBlock Text="v0.41" Foreground="#FF64748B" VerticalAlignment="Center" />
+        <TextBlock Text="{Binding Status}" Foreground="#FF64748B" VerticalAlignment="Center" Margin="12,0,0,0" />
+      </StackPanel>
+    </Border>
+    <DockControl Grid.Row="1"
+                 Layout="{Binding Layout}"
+                 Factory="{Binding Factory}"
+                 InitializeLayout="True"
+                 InitializeFactory="True"
+                 Margin="8" />
+    <Border Grid.Row="2" Background="White" Padding="10,5" BorderBrush="#FFE5E7EB" BorderThickness="0,1,0,0">
+      <TextBlock Text="{Binding Status}" Foreground="#FF64748B" />
+    </Border>
+  </Grid>
+</UserControl>

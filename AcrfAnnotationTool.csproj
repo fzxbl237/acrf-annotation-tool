@@ -1,0 +1,43 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AvaloniaNameGeneratorBehavior>InitializeComponent</AvaloniaNameGeneratorBehavior>
+    <RootNamespace>AcrfAnnotationTool</RootNamespace>
+    <AssemblyName>AcrfAnnotationTool</AssemblyName>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Remove="**/bin/**;**/obj/**" />
+    <None Remove="**/bin/**;**/obj/**" />
+    <AvaloniaResource Remove="**/bin/**;**/obj/**" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Avalonia" Version="12.1.1" />
+    <PackageReference Include="Avalonia.Desktop" Version="12.1.1" />
+    <PackageReference Include="Avalonia.Themes.Fluent" Version="12.1.1" />
+    <PackageReference Include="Avalonia.Fonts.Inter" Version="12.1.1" />
+    <PackageReference Include="Dock.Avalonia" Version="12.1.0.4" />
+    <PackageReference Include="Dock.Avalonia.Themes.Fluent" Version="12.1.0.4" />
+    <PackageReference Include="Dock.Model.Mvvm" Version="12.1.0.4" />
+    <PackageReference Include="Dock.Model.Avalonia" Version="12.1.0.4" />
+    <PackageReference Include="CommunityToolkit.Mvvm" Version="8.4.2" />
+    <PackageReference Include="AtomUI.Desktop.Controls" Version="6.1.5" />
+    <PackageReference Include="AtomUI.Desktop.Controls.DataGrid" Version="6.1.5" />
+    <PackageReference Include="DynamicData" Version="9.4.33" />
+    <PackageReference Include="Microsoft.Data.Sqlite" Version="8.0.1" />
+    <PackageReference Include="itext7" Version="9.7.0" />
+    <None Update="cdisc_setting.db"
+          CopyToOutputDirectory="PreserveNewest"
+          CopyToPublishDirectory="PreserveNewest" />
+    <None Include="Fonts\**\*"
+          CopyToOutputDirectory="PreserveNewest"
+          CopyToPublishDirectory="PreserveNewest" />
+    <PackageReference Include="MiniExcel" Version="2.0.0-preview.2" />
+    <PackageReference Include="Docnet.Core" Version="2.6.0" />
+    <PackageReference Include="PDFsharp" Version="6.2.4" />
+  </ItemGroup>
+</Project>

@@ -1,0 +1,175 @@
+﻿<UserControl
+    x:Class="AcrfAnnotationTool.Views.AcrfEditorView"
+    x:CompileBindings="True"
+    x:DataType="vm:AcrfDocumentViewModel"
+    x:Name="EditorView"
+    xmlns="https://github.com/avaloniaui"
+    xmlns:antd-icons="https://atomui.net/icons/antdesign"
+    xmlns:atom="https://atomui.net"
+    xmlns:dock="using:Dock.Avalonia.Controls"
+    xmlns:dockmodel="using:Dock.Model.Avalonia.Controls"
+    xmlns:views="using:AcrfAnnotationTool.Views"
+    xmlns:vm="using:AcrfAnnotationTool.ViewModels.Documents"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <Grid Background="#FFF0F2F5" RowDefinitions="Auto,*">
+        <Border
+            Background="White"
+            BorderBrush="#FFE5E7EB"
+            BorderThickness="0,0,0,1"
+            Grid.Row="0"
+            Padding="12,8">
+            <StackPanel Orientation="Horizontal" Spacing="8">
+                <atom:Button Command="{Binding OpenPdfCommand}" Content="aCRF 导入" />
+                <atom:Button Command="{Binding ImportCommand}" Content="Spec 导入" />
+                <atom:Button Command="{Binding ExportCommand}" Content="Spec 导出" />
+                <atom:Button Command="{Binding SavePdfCommand}" Content="另存 PDF" />
+                <atom:IconButton
+                    Click="OnDomainAnnotationSettingsClick"
+                    Icon="{antd-icons:AntDesignIconProvider Kind=SettingOutlined}"
+                    IconHeight="24"
+                    IconWidth="24"
+                    VerticalAlignment="Center"
+                    atom:ToolTip.Tip="设置 Domain annotation 位置"
+                    x:Name="DomainAnnotationSettingsButton" />
+                <Separator Margin="5,0" Width="1" />
+                <TextBlock
+                    Foreground="#FF64748B"
+                    Text="{Binding Status}"
+                    VerticalAlignment="Center" />
+            </StackPanel>
+        </Border>
+        <dock:DockControl
+            Factory="{Binding PanelFactory}"
+            Grid.Row="1"
+            InitializeFactory="True"
+            InitializeLayout="True"
+            Margin="10">
+            <dock:DockControl.Layout>
+                <dockmodel:RootDock
+                    Id="{Binding Id}"
+                    IsCollapsable="False"
+                    Title="注释面板">
+                    <ProportionalDock Orientation="Horizontal">
+                        <DocumentDock CloseButtonShowMode="Never">
+                            <Document
+                                CanClose="False"
+                                Id="Pdf"
+                                Title="PDF 预览">
+                                <Document.Content>
+                                    <views:PdfToolView DataContext="{Binding DataContext, ElementName=EditorView}" />
+                                </Document.Content>
+                            </Document>
+                        </DocumentDock>
+                        <DocumentDock CloseButtonShowMode="Never">
+                            <Document
+                                CanClose="False"
+                                Id="Annotations"
+                                Title="注释信息">
+                                <Document.Content>
+                                    <views:AnnotationToolView DataContext="{Binding DataContext, ElementName=EditorView}" />
+                                </Document.Content>
+                            </Document>
+                        </DocumentDock>
+                    </ProportionalDock>
+
+
+                    <!--     <dockmodel:RootDock.VisibleDockables> -->
+                    <!--  <dockmodel:ProportionalDock  -->
+                    <!--  Id="Panels"  -->
+                    <!--  IsCollapsable="False"  -->
+                    <!--  Orientation="Horizontal"  -->
+                    <!--  Title="注释面板">  -->
+                    <!--             <dockmodel:ProportionalDock.VisibleDockables> -->
+                    <!--  <dockmodel:DocumentDock  -->
+                    <!--  CanCloseLastDockable="False"  -->
+                    <!--  CanCreateDocument="False"  -->
+                    <!--  CanDockAsDocument="False"  -->
+                    <!--  CanDrag="True"  -->
+                    <!--  CanDrop="True"  -->
+                    <!--  CloseButtonShowMode="Always"  -->
+                    <!--  EnableWindowDrag="False"  -->
+                    <!--  Id="PdfDock"  -->
+                    <!--  Title="PDF 预览">  -->
+                    <!--                     <dockmodel:DocumentDock.VisibleDockables> -->
+                    <!--                         <dockmodel:Document Id="Pdf" Title="PDF 预览"> -->
+                    <!--                             <dockmodel:Document.Content> -->
+                    <!--                                 <views:PdfToolView DataContext="{Binding DataContext, ElementName=EditorView}" /> -->
+                    <!--                             </dockmodel:Document.Content> -->
+                    <!--                         </dockmodel:Document> -->
+                    <!--                     </dockmodel:DocumentDock.VisibleDockables> -->
+                    <!--                 </dockmodel:DocumentDock> -->
+                    <!--                 <dockmodel:ProportionalDockSplitter CanResize="True" /> -->
+                    <!--  <dockmodel:DocumentDock  -->
+                    <!--  CanCloseLastDockable="False"  -->
+                    <!--  CanCreateDocument="False"  -->
+                    <!--  CanDockAsDocument="False"  -->
+                    <!--  CanDrag="True"  -->
+                    <!--  CanDrop="True"  -->
+                    <!--  CloseButtonShowMode="Always"  -->
+                    <!--  EnableWindowDrag="False"  -->
+                    <!--  Id="AnnotationDock"  -->
+                    <!--  Title="注释信息">  -->
+                    <!--                     <dockmodel:DocumentDock.VisibleDockables> -->
+                    <!--                         <dockmodel:Document Id="Annotations" Title="注释信息"> -->
+                    <!--                             <dockmodel:Document.Content> -->
+                    <!--                                 <views:AnnotationToolView DataContext="{Binding DataContext, ElementName=EditorView}" /> -->
+                    <!--                             </dockmodel:Document.Content> -->
+                    <!--                         </dockmodel:Document> -->
+                    <!--                     </dockmodel:DocumentDock.VisibleDockables> -->
+                    <!--                 </dockmodel:DocumentDock> -->
+                    <!--             </dockmodel:ProportionalDock.VisibleDockables> -->
+                    <!--         </dockmodel:ProportionalDock> -->
+                    <!--     </dockmodel:RootDock.VisibleDockables> -->
+                </dockmodel:RootDock>
+            </dock:DockControl.Layout>
+        </dock:DockControl>
+
+        <atom:Dialog
+            ButtonClicked="OnDomainAnnotationDialogButtonClicked"
+            DefaultStandardButton="Ok"
+            HostMinWidth="360"
+            IsDragMovable="True"
+            IsModal="True"
+            StandardButtons="Cancel,Ok"
+            x:Name="DomainAnnotationSettingsDialog">
+            <StackPanel Spacing="10">
+                <TextBlock Text="设置 Domain annotation 距离页面左上角的位置（像素）" />
+                <Grid
+                    ColumnDefinitions="Auto,120"
+                    RowDefinitions="Auto,Auto"
+                    RowSpacing="8">
+                    <TextBlock
+                        Grid.Row="0"
+                        Text="水平方向："
+                        VerticalAlignment="Center" />
+                    <atom:NumericUpDown
+                        Grid.Column="1"
+                        Grid.Row="0"
+                        Increment="1"
+                        Maximum="1000"
+                        Minimum="0"
+                        Value="8"
+                        Width="100"
+                        x:Name="DomainAnnotationHorizontalOffsetInput" />
+                    <TextBlock
+                        Grid.Row="1"
+                        Text="垂直方向："
+                        VerticalAlignment="Center" />
+                    <atom:NumericUpDown
+                        Grid.Column="1"
+                        Grid.Row="1"
+                        Increment="1"
+                        Maximum="1000"
+                        Minimum="0"
+                        Value="8"
+                        Width="100"
+                        x:Name="DomainAnnotationVerticalOffsetInput" />
+                </Grid>
+                <TextBlock
+                    Foreground="#FFB91C1C"
+                    IsVisible="False"
+                    x:Name="DomainAnnotationSettingsErrorText" />
+            </StackPanel>
+        </atom:Dialog>
+    </Grid>
+</UserControl>

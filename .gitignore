@@ -1,0 +1,46 @@
+﻿# .NET build output
+[Bb]in/
+[Oo]bj/
+artifacts/
+publish/
+TestResults/
+
+# Visual Studio / Rider / IDE files
+.vs/
+.idea/
+*.user
+*.suo
+*.userprefs
+*.rsuser
+*.sln.iml
+
+# JetBrains project workspace files
+_ReSharper*/
+*.[Rr]e[Ss]harper
+*.DotSettings.user
+
+# Generated and temporary files
+*.tmp
+*.temp
+*.log
+*.cache
+*.pidb
+*.userosscache
+*.suo
+*.nupkg
+
+# OS files
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Local agent/session metadata
+.agents/
+
+# Local publish and packaging folders
+AppPackages/
+BundleArtifacts/
+
+# Keep application resources tracked:
+# Fonts/
+# cdisc_setting.db
