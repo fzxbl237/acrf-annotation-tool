@@ -102,13 +102,17 @@ public class DataGridFilterPopup : TemplatedControl
         _filterList = e.NameScope.Find<AtomListBox>("PART_FilterList");
         _selectAllCheckBox = e.NameScope.Find<AtomCheckBox>("PART_SelectAllCheckBox");
         if (_searchBox != null) _searchBox.TextChanged += (_, _) => DoSearch();
-        if (_selectAllCheckBox != null) _selectAllCheckBox.PointerPressed += (_, e) =>
+        if (_selectAllCheckBox != null)
         {
-            var visibleItems = GetVisibleItems().ToList();
-            bool allChecked = visibleItems.Count > 0 && visibleItems.All(i => i.IsChecked);
-            SetSelectAll(!allChecked);
-            e.Handled = true;
-        };
+            _selectAllCheckBox.AddHandler(PointerPressedEvent, (_, e) =>
+            {
+                if (!e.GetCurrentPoint(_selectAllCheckBox).Properties.IsLeftButtonPressed) return;
+                var visibleItems = GetVisibleItems().ToList();
+                var allChecked = visibleItems.Count > 0 && visibleItems.All(item => item.IsChecked);
+                SetSelectAll(!allChecked);
+                e.Handled = true;
+            }, Avalonia.Interactivity.RoutingStrategies.Tunnel);
+        }
         var sortAsc = e.NameScope.Find<AtomButton>("PART_SortAsc");
         var sortDesc = e.NameScope.Find<AtomButton>("PART_SortDesc");
         if (sortAsc != null) sortAsc.Click += (_, _) => SortItems(true);

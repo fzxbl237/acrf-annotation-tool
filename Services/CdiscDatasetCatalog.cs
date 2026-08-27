@@ -1,4 +1,4 @@
-﻿using Microsoft.Data.Sqlite;
+﻿using AcrfAnnotationTool.Services.Interface;
 
 namespace AcrfAnnotationTool.Services;
 
@@ -6,43 +6,31 @@ public sealed class CdiscDatasetCatalog
 {
     private readonly Dictionary<string, string> _labels;
 
-    private CdiscDatasetCatalog(Dictionary<string, string> labels)
+    public CdiscDatasetCatalog(IDatabaseService databaseService)
     {
-        _labels = labels;
-    }
-
-    public static CdiscDatasetCatalog LoadFromApplicationDatabase()
-    {
-        var databasePath = Path.Combine(AppContext.BaseDirectory, "cdisc_setting.db");
-        if (!File.Exists(databasePath))
-            return new CdiscDatasetCatalog(new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase));
-
+        var labels = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         try
         {
-            using var connection = new SqliteConnection($"Data Source={databasePath};Mode=ReadOnly");
-            connection.Open();
-            using var command = connection.CreateCommand();
-            command.CommandText = "SELECT Name, Label FROM template_dataset WHERE Name IS NOT NULL";
-
-            var labels = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-            using var reader = command.ExecuteReader();
-            while (reader.Read())
+            foreach (var dataset in databaseService.QueryTemplateDatasets())
             {
-                var name = reader.IsDBNull(0) ? string.Empty : reader.GetString(0).Trim();
-                if (string.IsNullOrWhiteSpace(name))
+                var name = dataset.Name?.Trim() ?? string.Empty;
+                if (string.IsNullOrWhiteSpace(name) || IsAssociatedPersonsDataset(name))
                     continue;
 
-                var label = reader.IsDBNull(1) ? string.Empty : reader.GetString(1).Trim();
-                labels[name] = label;
+                labels[name] = dataset.Label?.Trim() ?? string.Empty;
             }
-
-            return new CdiscDatasetCatalog(labels);
         }
         catch
         {
-            return new CdiscDatasetCatalog(new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase));
+            // Keep application startup resilient when the optional settings database is unavailable.
         }
+
+        _labels = labels;
     }
+
+    private static bool IsAssociatedPersonsDataset(string name) =>
+        name.Length == 4 &&
+        name.StartsWith("AP", StringComparison.OrdinalIgnoreCase);
 
     public string? FormatDomain(string? domain)
     {

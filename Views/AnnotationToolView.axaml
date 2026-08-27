@@ -5,6 +5,7 @@
     xmlns="https://github.com/avaloniaui"
     xmlns:atom="https://atomui.net"
     xmlns:dg="using:PatChes.Controls.DataGrid"
+    xmlns:services="clr-namespace:AcrfAnnotationTool.Services"
     xmlns:vm="using:AcrfAnnotationTool.ViewModels.Documents"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
     <Panel>
@@ -20,7 +21,8 @@
                 ItemsSource="{Binding Annotations}"
                 RowHeight="32"
                 SelectedItem="{Binding SelectedItem, Mode=TwoWay}"
-                SelectionUnit="FullRow"
+                SelectionMode="Extended"
+                SelectionUnit="Cell"
                 x:Name="AnnotationGrid">
                 <dg:DataGrid.Columns>
                     <dg:DataGridTextColumn
@@ -47,12 +49,25 @@
                         MinWidth="180"
                         ShowToolTip="True"
                         Width="2*" />
-                    <dg:DataGridTextColumn
-                        Binding="{Binding AnnotationText}"
+                    <dg:DataGridAutoCompleteColumn
+                        Binding="{Binding AnnotationText, UpdateSourceTrigger=LostFocus}"
                         Header="注释文本"
                         MinWidth="180"
-                        ShowToolTip="True"
-                        Width="2*" />
+                        OptionsAsyncLoader="{Binding SuggestionOptionsAsyncLoader}"
+                        Width="2*">
+                        <dg:DataGridAutoCompleteColumn.OptionTemplate>
+                            <DataTemplate x:DataType="services:SuggestionAutoCompleteOption">
+                                <StackPanel Margin="0,4">
+                                    <atom:TextBlock Text="{Binding SuggestionContent}" TextWrapping="Wrap" />
+                                    <atom:TextBlock
+                                        FontSize="12"
+                                        Foreground="#FF1677FF"
+                                        Text="{Binding SuggestionDescription}"
+                                        TextWrapping="Wrap" />
+                                </StackPanel>
+                            </DataTemplate>
+                        </dg:DataGridAutoCompleteColumn.OptionTemplate>
+                    </dg:DataGridAutoCompleteColumn>
                     <dg:DataGridTextColumn
                         Binding="{Binding AnnotationTextDomain}"
                         Header="所属域"

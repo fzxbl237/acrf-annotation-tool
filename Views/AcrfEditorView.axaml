@@ -15,14 +15,37 @@
         <Border
             Background="White"
             BorderBrush="#FFE5E7EB"
-            BorderThickness="0,0,0,1"
+            BorderThickness="1"
+            ClipToBounds="True"
+            CornerRadius="10"
             Grid.Row="0"
+            Margin="8,8,8,4"
             Padding="12,8">
             <StackPanel Orientation="Horizontal" Spacing="8">
-                <atom:Button Command="{Binding OpenPdfCommand}" Content="aCRF 导入" />
-                <atom:Button Command="{Binding ImportCommand}" Content="Spec 导入" />
-                <atom:Button Command="{Binding ExportCommand}" Content="Spec 导出" />
-                <atom:Button Command="{Binding SavePdfCommand}" Content="另存 PDF" />
+                <atom:Button
+                    ButtonType="Default"
+                    Command="{Binding OpenPdfCommand}"
+                    Content="aCRF 导入"
+                    Variant="Filled" />
+                <atom:Button
+                    ButtonType="Default"
+                    Command="{Binding ImportCommand}"
+                    Content="Spec 导入"
+                    Variant="Filled" />
+                <atom:Button
+                    ButtonType="Primary"
+                    Command="{Binding ExportCommand}"
+                    Content="Spec 导出"
+                    Variant="Filled" />
+                <atom:SplitButton
+                    Command="{Binding SavePdfCommand}"
+                    Content="另存 PDF">
+                    <atom:SplitButton.Flyout>
+                        <atom:MenuFlyout>
+                            <atom:MenuItem Command="{Binding SavePdfFlattenCommand}" Header="另存 PDF 并 Flatten" />
+                        </atom:MenuFlyout>
+                    </atom:SplitButton.Flyout>
+                </atom:SplitButton>
                 <atom:IconButton
                     Click="OnDomainAnnotationSettingsClick"
                     Icon="{antd-icons:AntDesignIconProvider Kind=SettingOutlined}"
@@ -38,12 +61,19 @@
                     VerticalAlignment="Center" />
             </StackPanel>
         </Border>
-        <dock:DockControl
-            Factory="{Binding PanelFactory}"
+        <Border
+            Background="#FFF8FAFC"
+            BorderBrush="#FFE5E7EB"
+            BorderThickness="1"
+            ClipToBounds="True"
+            CornerRadius="10"
             Grid.Row="1"
-            InitializeFactory="True"
-            InitializeLayout="True"
-            Margin="10">
+            Margin="8,4,8,8">
+            <dock:DockControl
+                Factory="{Binding PanelFactory}"
+                InitializeFactory="True"
+                InitializeLayout="True"
+                Margin="0">
             <dock:DockControl.Layout>
                 <dockmodel:RootDock
                     Id="{Binding Id}"
@@ -122,7 +152,8 @@
                     <!--     </dockmodel:RootDock.VisibleDockables> -->
                 </dockmodel:RootDock>
             </dock:DockControl.Layout>
-        </dock:DockControl>
+            </dock:DockControl>
+        </Border>
 
         <atom:Dialog
             ButtonClicked="OnDomainAnnotationDialogButtonClicked"

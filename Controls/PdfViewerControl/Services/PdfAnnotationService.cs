@@ -121,6 +121,41 @@ public static class PdfAnnotationService
         doc.Save(dst);
     }
 
+    public static void SaveFreeTextAnnotationsFlattened(
+        string src,
+        string dst,
+        IReadOnlyList<FreeTextAnnotationModel> annotations)
+    {
+        GlobalFontSettings.UseWindowsFontsUnderWindows = true;
+        using var doc = PdfReader.Open(src, PdfDocumentOpenMode.Modify);
+
+        foreach (var group in annotations.GroupBy(a => a.PageIndex))
+        {
+            if (group.Key < 0 || group.Key >= doc.PageCount)
+                continue;
+
+            var page = doc.Pages[group.Key];
+            var pageHeight = page.Height.Point;
+            using var graphics = XGraphics.FromPdfPage(page, XGraphicsPdfPageOptions.Append);
+            foreach (var model in group)
+            {
+                var x = model.PdfX;
+                var y = pageHeight - model.PdfY - model.Height;
+                DrawAnnotationAppearanceContent(graphics, model, x, y);
+            }
+        }
+
+        foreach (var page in doc.Pages)
+        {
+            foreach (var annotation in page.Annotations.OfType<PdfAnnotation>()
+                         .Where(IsFreeTextAnnotation)
+                         .ToList())
+                page.Annotations.Remove(annotation);
+        }
+
+        doc.Save(dst);
+    }
+
     private static string CreateDefaultStyle(FreeTextAnnotationModel model)
     {
         var color = Color.Parse(model.FontColorHex);
@@ -164,60 +199,81 @@ public static class PdfAnnotationService
         var height = Math.Max(1, model.Height);
         var form = new XForm(document, new XRect(0, 0, width, height));
         using (var graphics = XGraphics.FromForm(form))
-        {
-            var background = Color.Parse(model.BackgroundColorHex);
-            var foreground = Color.Parse(model.FontColorHex);
-            var backgroundBrush = new XSolidBrush(XColor.FromArgb(background.R, background.G, background.B));
-            var textBrush = new XSolidBrush(XColor.FromArgb(foreground.R, foreground.G, foreground.B));
-            graphics.DrawRectangle(backgroundBrush, 0, 0, width, height);
-
-            var borderPen = new XPen(XColors.Black, 1);
-            if (model.BorderStyle == AnnotationBorderStyle.Dashed)
-                borderPen.DashStyle = XDashStyle.Dash;
-            graphics.DrawRectangle(borderPen, 0.5, 0.5, Math.Max(0, width - 1), Math.Max(0, height - 1));
-
-            var font = new XFont("Arial", Math.Max(1, model.FontSize),
-                model.IsBold ? XFontStyleEx.Bold : XFontStyleEx.Regular);
-            var format = new XStringFormat
-            {
-                Alignment = model.HorizontalTextAlignment switch
-                {
-                    AnnotationHorizontalTextAlignment.Center => XStringAlignment.Center,
-                    AnnotationHorizontalTextAlignment.Right => XStringAlignment.Far,
-                    _ => XStringAlignment.Near
-                },
-                LineAlignment = model.VerticalTextAlignment switch
-                {
-                    AnnotationVerticalTextAlignment.Center => XLineAlignment.Center,
-                    AnnotationVerticalTextAlignment.Bottom => XLineAlignment.Far,
-                    _ => XLineAlignment.Near
-                }
-            };
-            var padding = 2.0;
-            var textRectangle = new XRect(padding, padding, Math.Max(0, width - padding * 2), Math.Max(0, height - padding * 2));
-            var text = model.Text ?? string.Empty;
-            if (text.Contains('\n') || text.Contains('\r') || graphics.MeasureString(text, font).Width > textRectangle.Width)
-            {
-                var formatter = new XTextFormatter(graphics);
-                formatter.Alignment = model.HorizontalTextAlignment switch
-                {
-                    AnnotationHorizontalTextAlignment.Center => XParagraphAlignment.Center,
-                    AnnotationHorizontalTextAlignment.Right => XParagraphAlignment.Right,
-                    _ => XParagraphAlignment.Left
-                };
-                formatter.DrawString(text, font, textBrush, textRectangle);
-            }
-            else
-            {
-                graphics.DrawString(text, font, textBrush, textRectangle, format);
-            }
-        }
+            DrawAnnotationAppearanceContent(graphics, model, 0, 0);
 
         var pdfForm = PdfFormProperty.GetValue(form) as PdfObject
             ?? throw new InvalidOperationException("PDFsharp did not create the FreeText appearance form.");
         var appearance = new PdfDictionary(document);
         appearance.Elements.SetReference("/N", pdfForm);
         return appearance;
+    }
+
+    private static void DrawAnnotationAppearanceContent(
+        XGraphics graphics,
+        FreeTextAnnotationModel model,
+        double x,
+        double y)
+    {
+        var width = Math.Max(1, model.Width);
+        var height = Math.Max(1, model.Height);
+        var background = Color.Parse(model.BackgroundColorHex);
+        var foreground = Color.Parse(model.FontColorHex);
+        var backgroundBrush = new XSolidBrush(XColor.FromArgb(background.R, background.G, background.B));
+        var textBrush = new XSolidBrush(XColor.FromArgb(foreground.R, foreground.G, foreground.B));
+        graphics.DrawRectangle(backgroundBrush, x, y, width, height);
+
+        var borderPen = new XPen(XColors.Black, 1);
+        if (model.BorderStyle == AnnotationBorderStyle.Dashed)
+            borderPen.DashStyle = XDashStyle.Dash;
+        graphics.DrawRectangle(borderPen, x + 0.5, y + 0.5, Math.Max(0, width - 1), Math.Max(0, height - 1));
+
+        var font = new XFont(
+            ResolvePdfFontFamily(model),
+            Math.Max(1, model.FontSize),
+            model.IsBold ? XFontStyleEx.Bold : XFontStyleEx.Regular);
+        var format = new XStringFormat
+        {
+            Alignment = model.HorizontalTextAlignment switch
+            {
+                AnnotationHorizontalTextAlignment.Center => XStringAlignment.Center,
+                AnnotationHorizontalTextAlignment.Right => XStringAlignment.Far,
+                _ => XStringAlignment.Near
+            },
+            LineAlignment = model.VerticalTextAlignment switch
+            {
+                AnnotationVerticalTextAlignment.Center => XLineAlignment.Center,
+                AnnotationVerticalTextAlignment.Bottom => XLineAlignment.Far,
+                _ => XLineAlignment.Near
+            }
+        };
+        var padding = 2.0;
+        var textRectangle = new XRect(
+            x + padding,
+            y + padding,
+            Math.Max(0, width - padding * 2),
+            Math.Max(0, height - padding * 2));
+        var text = model.Text ?? string.Empty;
+        if (text.Contains('\n') || text.Contains('\r') || graphics.MeasureString(text, font).Width > textRectangle.Width)
+        {
+            var formatter = new XTextFormatter(graphics);
+            formatter.Alignment = model.HorizontalTextAlignment switch
+            {
+                AnnotationHorizontalTextAlignment.Center => XParagraphAlignment.Center,
+                AnnotationHorizontalTextAlignment.Right => XParagraphAlignment.Right,
+                _ => XParagraphAlignment.Left
+            };
+            formatter.DrawString(text, font, textBrush, textRectangle);
+        }
+        else
+        {
+            graphics.DrawString(text, font, textBrush, textRectangle, format);
+        }
+    }
+
+    private static string ResolvePdfFontFamily(FreeTextAnnotationModel model)
+    {
+        var text = model.Text ?? string.Empty;
+        return text.Any(c => c > 127) ? "SimSun" : "Arial";
     }
 
     private static PdfDictionary CreateAnnotationFontResources(

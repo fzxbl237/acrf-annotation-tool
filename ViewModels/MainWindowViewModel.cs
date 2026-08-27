@@ -2,6 +2,8 @@
 using Dock.Model.Controls;
 using Dock.Model.Core;
 using AcrfAnnotationTool.Services;
+using AcrfAnnotationTool.Services.Interface;
+using AcrfAnnotationTool.ViewModels.Documents;
 
 namespace AcrfAnnotationTool.ViewModels;
 
@@ -21,17 +23,35 @@ public partial class MainWindowViewModel : ObservableObject
 
     public DockFactory Factory => _factory;
 
+    public void BeginApplicationShutdown() => _factory.BeginApplicationShutdown();
+
+    public async Task<SpecExportOutcome> ExportSpecForShutdownAsync()
+    {
+        var document = Layout?.ActiveDockable as AcrfDocumentViewModel ??
+            Layout?.VisibleDockables?.OfType<AcrfDocumentViewModel>().FirstOrDefault();
+        return document is null
+            ? SpecExportOutcome.Failed
+            : await document.ExportSpecAsync();
+    }
+
     public string Status
     {
         get => _status;
         set => SetProperty(ref _status, value);
     }
 
-    public MainWindowViewModel(TemplateVariableDomainCatalog? templateVariableDomainCatalog = null)
+    public MainWindowViewModel(
+        CdiscDatasetCatalog cdiscDatasetCatalog,
+        TemplateVariableDomainCatalog templateVariableDomainCatalog,
+        SuggestionOptionsAsyncLoader suggestionOptionsAsyncLoader,
+        IMessageService messageService)
     {
-        VariableDomainCatalog = templateVariableDomainCatalog ??
-            Services.TemplateVariableDomainCatalog.StartFromApplicationDatabase();
-        _factory = new DockFactory(this);
+        VariableDomainCatalog = templateVariableDomainCatalog;
+        _factory = new DockFactory(
+            this,
+            cdiscDatasetCatalog,
+            suggestionOptionsAsyncLoader,
+            messageService);
         ResetLayout();
     }
 

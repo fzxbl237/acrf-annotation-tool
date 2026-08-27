@@ -27,6 +27,11 @@ public sealed class AnnotationChangedEventArgs(FreeTextAnnotationModel annotatio
     public FreeTextAnnotationModel Annotation { get; } = annotation;
 }
 
+public sealed class AnnotationSelectedEventArgs(string annotationId) : EventArgs
+{
+    public string AnnotationId { get; } = annotationId;
+}
+
 public sealed record DomainAnnotationDisplay(
     string Text,
     string BackgroundColorHex,
@@ -170,6 +175,24 @@ public partial class PdfViewer
     {
         var ids = _annotations.Select(a => a.Id).ToList();
         foreach (var id in ids) RemoveAnnotationById(id);
+    }
+
+    public void ReplaceAnnotations(IEnumerable<FreeTextAnnotationModel> annotations)
+    {
+        _annotations.Clear();
+        _annotations.AddRange(annotations);
+        _annotationControls.Clear();
+        _selectedAnnotation = null;
+
+        foreach (var slot in _pageSlots)
+        {
+            var pageHeightPoints = _loader.GetPageHeightInPoints(slot.PageIndex);
+            RebuildAnnotationsForPage(
+                slot.PageIndex,
+                pageHeightPoints,
+                _loader.DisplayScale,
+                slot.AnnotationLayer);
+        }
     }
 
     public bool SelectAnnotationById(string id)

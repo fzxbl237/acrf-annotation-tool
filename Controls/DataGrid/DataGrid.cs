@@ -2805,6 +2805,48 @@ public class DataGrid : TemplatedControl
         UpdateViewport();
     }
 
+    public bool ScrollIntoView(object? rowModel)
+    {
+        if (rowModel is null)
+            return false;
+
+        var rowIndex = FindItemIndex(rowModel);
+        if (rowIndex < 0)
+            return false;
+
+        EnsureRowVisible(rowIndex);
+        UpdateScrollBars();
+        UpdateViewport();
+
+        Dispatcher.UIThread.Post(() =>
+        {
+            if (!_templateApplied)
+                return;
+
+            var currentIndex = FindItemIndex(rowModel);
+            if (currentIndex < 0)
+                return;
+
+            EnsureRowVisible(currentIndex);
+            UpdateScrollBars();
+            UpdateViewport();
+        }, DispatcherPriority.Render);
+
+        return true;
+    }
+
+    private int FindItemIndex(object rowModel)
+    {
+        var items = GetItemsList();
+        for (var index = 0; index < items.Count; index++)
+        {
+            if (ReferenceEquals(items[index], rowModel))
+                return index;
+        }
+
+        return -1;
+    }
+
     internal void OnColumnBindingChanged(DataGridColumn column) { }
 
     internal void SetVerticalOffset(double offset)

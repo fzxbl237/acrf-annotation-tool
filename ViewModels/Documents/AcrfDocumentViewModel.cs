@@ -12,10 +12,20 @@ using DynamicData;
 using MiniExcelLibs;
 using AcrfAnnotationTool.Models;
 using AcrfAnnotationTool.Services;
+using AcrfAnnotationTool.Services.Interface;
 using AcrfAnnotationTool.ViewModels;
 using PdfViewerControl.Controls;
+using PdfViewerControl.Models;
+using PatChes.Controls.DataGrid;
 
 namespace AcrfAnnotationTool.ViewModels.Documents;
+
+public enum SpecExportOutcome
+{
+    Succeeded,
+    Canceled,
+    Failed
+}
 
 public partial class AcrfDocumentViewModel : Document
 {
@@ -39,16 +49,19 @@ public partial class AcrfDocumentViewModel : Document
     private string _status = "请打开 PDF 或导入注释表";
     private string? _pdfPath;
     private PdfViewer? _viewer;
+    private DataGrid? _annotationGrid;
     private Window? _window;
     private readonly HashSet<Annotation> _observedAnnotations = new();
     private readonly Dictionary<Annotation, int> _annotationTextSyncVersions = new();
-    private readonly CdiscDatasetCatalog _cdiscDatasetCatalog = CdiscDatasetCatalog.LoadFromApplicationDatabase();
+    private readonly CdiscDatasetCatalog _cdiscDatasetCatalog;
     private readonly TemplateVariableDomainCatalog _variableDomainCatalog;
+    private readonly IMessageService _messageService;
     private bool _synchronizing;
 
     public MainWindowViewModel? AppOwner { get; init; }
     public DockFactory? PanelFactory => AppOwner?.Factory;
     public ReadOnlyObservableCollection<Annotation> Annotations => _annotations;
+    public SuggestionOptionsAsyncLoader SuggestionOptionsAsyncLoader { get; }
     public string Status { get => _status; private set => SetProperty(ref _status, value); }
     public string? PdfPath { get => _pdfPath; private set => SetProperty(ref _pdfPath, value); }
     public double DomainAnnotationHorizontalOffset { get; private set; }
@@ -57,9 +70,16 @@ public partial class AcrfDocumentViewModel : Document
     [ObservableProperty]
     private Annotation? _selectedItem;
 
-    public AcrfDocumentViewModel(TemplateVariableDomainCatalog variableDomainCatalog)
+    public AcrfDocumentViewModel(
+        CdiscDatasetCatalog cdiscDatasetCatalog,
+        TemplateVariableDomainCatalog variableDomainCatalog,
+        SuggestionOptionsAsyncLoader suggestionOptionsAsyncLoader,
+        IMessageService messageService)
     {
+        _cdiscDatasetCatalog = cdiscDatasetCatalog;
         _variableDomainCatalog = variableDomainCatalog;
+        SuggestionOptionsAsyncLoader = suggestionOptionsAsyncLoader;
+        _messageService = messageService;
         var settings = ApplicationSettingsStore.Load();
         DomainAnnotationHorizontalOffset = settings.DomainAnnotationHorizontalOffset;
         DomainAnnotationVerticalOffset = settings.DomainAnnotationVerticalOffset;
@@ -76,6 +96,7 @@ public partial class AcrfDocumentViewModel : Document
                 _viewer.AnnotationCreated -= OnAnnotationCreated;
                 _viewer.AnnotationDeleted -= OnAnnotationDeleted;
                 _viewer.AnnotationChanged -= OnAnnotationChanged;
+                _viewer.AnnotationSelected -= OnAnnotationSelected;
                 _viewer.DocumentLoaded -= OnViewerDocumentLoaded;
             }
             _viewer = viewer;
@@ -83,6 +104,7 @@ public partial class AcrfDocumentViewModel : Document
             _viewer.AnnotationCreated += OnAnnotationCreated;
             _viewer.AnnotationDeleted += OnAnnotationDeleted;
             _viewer.AnnotationChanged += OnAnnotationChanged;
+            _viewer.AnnotationSelected += OnAnnotationSelected;
             _viewer.DocumentLoaded += OnViewerDocumentLoaded;
         }
 
@@ -93,6 +115,16 @@ public partial class AcrfDocumentViewModel : Document
             GenerateDomainAnnotations();
     }
 
+    public void AttachAnnotationGrid(DataGrid annotationGrid)
+    {
+        _annotationGrid = annotationGrid;
+        if (SelectedItem is { } selectedItem)
+        {
+            SetSelectedAnnotationRow(selectedItem);
+            _annotationGrid.ScrollIntoView(selectedItem);
+        }
+    }
+
     [RelayCommand]
     private async Task OpenPdfAsync()
     {
@@ -101,7 +133,7 @@ public partial class AcrfDocumentViewModel : Document
         {
             Title = "选择 aCRF PDF",
             AllowMultiple = false,
-            FileTypeFilter = new[] { new FilePickerFileType("PDF 文件") { Patterns = new[] { "*.pdf" } } }
+            FileTypeFilter = [new FilePickerFileType("PDF 文件") { Patterns = ["*.pdf"] }]
         });
         var file = files.FirstOrDefault();
         if (file is null) return;
@@ -111,6 +143,7 @@ public partial class AcrfDocumentViewModel : Document
         if (_viewer is null) return;
         _viewer.LoadDocument(path);
         Status = $"已打开：{Path.GetFileName(path)}";
+        _messageService.Success(Status);
     }
 
     [RelayCommand]
@@ -121,7 +154,7 @@ public partial class AcrfDocumentViewModel : Document
         {
             Title = "导入注释 Spec",
             AllowMultiple = false,
-            FileTypeFilter = new[] { new FilePickerFileType("Excel 文件") { Patterns = new[] { "*.xlsx" } } }
+            FileTypeFilter = [new FilePickerFileType("Excel 文件") { Patterns = ["*.xlsx"] }]
         });
         var path = files.FirstOrDefault()?.TryGetLocalPath();
         if (string.IsNullOrWhiteSpace(path)) return;
@@ -138,47 +171,90 @@ public partial class AcrfDocumentViewModel : Document
             ObserveAnnotation(row);
 
         SyncRowsToPdf(rows);
-        RefreshAllAnnotationColors();
-        Status = $"已导入 {rows.Count} 条注释";
+        _messageService.Success($"已导入 {rows.Count} 条注释");
     }
 
     [RelayCommand]
     private async Task ExportAsync()
     {
-        if (_window is null) return;
-        var file = await _window.StorageProvider.SaveFilePickerAsync(new FilePickerSaveOptions
+        await ExportSpecAsync();
+    }
+
+    public async Task<SpecExportOutcome> ExportSpecAsync()
+    {
+        if (_window is null)
+            return SpecExportOutcome.Failed;
+
+        try
         {
-            Title = "导出注释 Spec",
-            SuggestedFileName = "aCRF-annotations.xlsx",
-            FileTypeChoices = new[] { new FilePickerFileType("Excel 文件") { Patterns = new[] { "*.xlsx" } } }
-        });
-        var path = file?.TryGetLocalPath();
-        if (string.IsNullOrWhiteSpace(path)) return;
-        await MiniExcel.SaveAsAsync(path, _annotations);
-        Status = $"已导出：{Path.GetFileName(path)}";
+            var file = await _window.StorageProvider.SaveFilePickerAsync(new FilePickerSaveOptions
+            {
+                Title = "导出注释 Spec",
+                SuggestedFileName = $"aCRF-annotations-{DateTime.Now:yyyyMMdd-HHmmss-fff}.xlsx",
+                FileTypeChoices = new[] { new FilePickerFileType("Excel 文件") { Patterns = new[] { "*.xlsx" } } }
+            });
+            var path = file?.TryGetLocalPath();
+            if (string.IsNullOrWhiteSpace(path))
+                return SpecExportOutcome.Canceled;
+
+            await MiniExcel.SaveAsAsync(path, _annotations);
+            Status = $"已导出：{Path.GetFileName(path)}";
+            _messageService.Success(Status);
+            return SpecExportOutcome.Succeeded;
+        }
+        catch (Exception exception)
+        {
+            Status = $"Spec 导出失败：{exception.Message}";
+            _messageService.Error(Status);
+            return SpecExportOutcome.Failed;
+        }
     }
 
     [RelayCommand]
     private async Task SavePdfAsync()
     {
-        if (_window is null || _viewer is null)
+        if (_viewer is null)
             return;
 
-        var file = await _window.StorageProvider.SaveFilePickerAsync(new FilePickerSaveOptions
-        {
-            Title = "另存 PDF",
-            SuggestedFileName = "acrf.pdf",
-            FileTypeChoices = new[]
-            {
-                new FilePickerFileType("PDF 文件") { Patterns = new[] { "*.pdf" } }
-            }
-        });
-        var path = file?.TryGetLocalPath();
+        var path = await PickPdfSavePathAsync("另存 PDF", "acrf.pdf");
         if (string.IsNullOrWhiteSpace(path))
             return;
 
         _viewer.SaveAnnotations(path);
         Status = $"PDF 注释已另存为：{Path.GetFileName(path)}";
+        _messageService.Success(Status);
+    }
+
+    [RelayCommand]
+    private async Task SavePdfFlattenAsync()
+    {
+        if (_viewer is null)
+            return;
+
+        var path = await PickPdfSavePathAsync("另存 PDF 并 Flatten", "acrf_flatten.pdf");
+        if (string.IsNullOrWhiteSpace(path))
+            return;
+
+        _viewer.SaveAnnotationsFlattened(path);
+        Status = $"Flatten PDF 已另存为：{Path.GetFileName(path)}";
+        _messageService.Success(Status);
+    }
+
+    private async Task<string?> PickPdfSavePathAsync(string title, string suggestedFileName)
+    {
+        if (_window is null)
+            return null;
+
+        var file = await _window.StorageProvider.SaveFilePickerAsync(new FilePickerSaveOptions
+        {
+            Title = title,
+            SuggestedFileName = suggestedFileName,
+            FileTypeChoices =
+            [
+                new FilePickerFileType("PDF 文件") { Patterns = ["*.pdf"] }
+            ]
+        });
+        return file?.TryGetLocalPath();
     }
 
     [RelayCommand]
@@ -393,10 +469,27 @@ public partial class AcrfDocumentViewModel : Document
         _synchronizing = true;
         try
         {
-            _viewer.DeleteAllAnnotations();
-            foreach (var row in rows)
-                CreatePdfAnnotation(row);
-            RefreshAllAnnotationColors();
+            var models = rows
+                .Where(row => row.PageNum > 0 && !string.IsNullOrWhiteSpace(row.AnnotationText))
+                .Select(row => new FreeTextAnnotationModel
+                {
+                    Id = row.AnnotationUniqueId,
+                    PageIndex = row.PageNum - 1,
+                    PdfX = row.X,
+                    PdfY = row.Y,
+                    Width = GetAnnotationWidth(row),
+                    Height = Math.Max(row.Line, 1) * 18,
+                    Text = row.AnnotationText,
+                    FontSize = 12,
+                    BorderStyle = row.AnnotationDotted
+                        ? PdfViewerControl.Models.AnnotationBorderStyle.Dashed
+                        : PdfViewerControl.Models.AnnotationBorderStyle.Solid,
+                    BackgroundColorHex = GetAnnotationDomainColor(row)
+                })
+                .ToList();
+
+            _viewer.ReplaceAnnotations(models);
+            GenerateDomainAnnotations();
         }
         finally { _synchronizing = false; }
     }
@@ -442,9 +535,37 @@ public partial class AcrfDocumentViewModel : Document
 
     partial void OnSelectedItemChanged(Annotation? oldValue, Annotation? newValue)
     {
+        SetSelectedAnnotationRow(newValue);
         if (_viewer is null || newValue is null) return;
-        _viewer.SelectAnnotationById(newValue.AnnotationUniqueId);
-        _viewer.ScrollAnnotationIntoView(newValue.AnnotationUniqueId);
+
+        if (!string.Equals(
+                _viewer.GetSelectedAnnotationId(),
+                newValue.AnnotationUniqueId,
+                StringComparison.Ordinal))
+        {
+            _viewer.SelectAnnotationById(newValue.AnnotationUniqueId);
+            _viewer.ScrollAnnotationIntoView(newValue.AnnotationUniqueId);
+        }
+
+        _annotationGrid?.ScrollIntoView(newValue);
+    }
+
+    private void OnAnnotationSelected(object? sender, AnnotationSelectedEventArgs e)
+    {
+        var row = _annotations.FirstOrDefault(annotation =>
+            string.Equals(annotation.AnnotationUniqueId, e.AnnotationId, StringComparison.Ordinal));
+        if (row is null)
+            return;
+
+        SelectedItem = row;
+        SetSelectedAnnotationRow(row);
+        _annotationGrid?.ScrollIntoView(row);
+    }
+
+    private void SetSelectedAnnotationRow(Annotation? selectedRow)
+    {
+        foreach (var row in _annotations)
+            row.IsSelected = ReferenceEquals(row, selectedRow);
     }
 
     private void ObserveAnnotation(Annotation annotation)
@@ -466,6 +587,12 @@ public partial class AcrfDocumentViewModel : Document
         _observedAnnotations.Clear();
     }
 
+    private static void EnableDottedBorderForNotSubmitted(Annotation row)
+    {
+        if (string.Equals(row.AnnotationText?.Trim(), "[NOT SUBMITTED]", StringComparison.OrdinalIgnoreCase))
+            row.AnnotationDotted = true;
+    }
+
     private void OnAnnotationPropertyChanged(object? sender, PropertyChangedEventArgs e)
     {
         if (_synchronizing || sender is not Annotation row) return;
@@ -474,6 +601,7 @@ public partial class AcrfDocumentViewModel : Document
 
         if (e.PropertyName == nameof(Annotation.AnnotationText))
         {
+            EnableDottedBorderForNotSubmitted(row);
             _ = SynchronizeAnnotationTextAsync(row);
             return;
         }
@@ -644,6 +772,9 @@ public partial class AcrfDocumentViewModel : Document
         finally { _synchronizing = false; }
 
         if (textChanged)
+        {
+            EnableDottedBorderForNotSubmitted(row);
             _ = SynchronizeAnnotationTextAsync(row);
+        }
     }
 }

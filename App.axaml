@@ -1,53 +1,93 @@
-﻿<Application xmlns="https://github.com/avaloniaui"
-             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-             xmlns:local="using:AcrfAnnotationTool"
-             xmlns:core="using:Dock.Model.Core"
-             xmlns:recycling="using:Avalonia.Controls.Recycling"
-             x:Class="AcrfAnnotationTool.App">
-  <Application.DataTemplates>
-    <local:ViewLocator />
-  </Application.DataTemplates>
+﻿<Application
+    x:Class="AcrfAnnotationTool.App"
+    xmlns="https://github.com/avaloniaui"
+    xmlns:core="using:Dock.Model.Core"
+    xmlns:local="using:AcrfAnnotationTool"
+    xmlns:recycling="using:Avalonia.Controls.Recycling"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <Application.DataTemplates>
+        <local:ViewLocator />
+    </Application.DataTemplates>
 
-  <Application.Resources>
-    <ResourceDictionary>
-      <recycling:ControlRecycling x:Key="ControlRecyclingKey" TryToUseIdAsKey="True" />
-      <ResourceDictionary.MergedDictionaries>
-        <ResourceInclude Source="avares://Dock.Avalonia.Themes.Fluent/Presets/Ide/Default.axaml" />
+    <Application.Resources>
         <ResourceDictionary>
-          <ResourceDictionary.ThemeDictionaries>
-            <ResourceDictionary x:Key="Default">
-              <Color x:Key="RegionColor">#FFFAFAFA</Color>
-              <Color x:Key="AcrylicFallbackColor">#FFE2E2E2</Color>
-            </ResourceDictionary>
-            <ResourceDictionary x:Key="Dark">
-              <Color x:Key="RegionColor">#FF212121</Color>
-              <Color x:Key="AcrylicFallbackColor">#FF1F1F1F</Color>
-            </ResourceDictionary>
-          </ResourceDictionary.ThemeDictionaries>
+            <recycling:ControlRecycling TryToUseIdAsKey="True" x:Key="ControlRecyclingKey" />
+            <ResourceDictionary.MergedDictionaries>
+                <ResourceInclude Source="avares://Dock.Avalonia.Themes.Fluent/Presets/Ide/Default.axaml" />
+                <ResourceDictionary>
+                    <ResourceDictionary.ThemeDictionaries>
+                        <ResourceDictionary x:Key="Default">
+                            <Color x:Key="RegionColor">#FFFAFAFA</Color>
+                            <Color x:Key="AcrylicFallbackColor">#FFE2E2E2</Color>
+                        </ResourceDictionary>
+                        <ResourceDictionary x:Key="Dark">
+                            <Color x:Key="RegionColor">#FF212121</Color>
+                            <Color x:Key="AcrylicFallbackColor">#FF1F1F1F</Color>
+                        </ResourceDictionary>
+                    </ResourceDictionary.ThemeDictionaries>
+                </ResourceDictionary>
+            </ResourceDictionary.MergedDictionaries>
         </ResourceDictionary>
-      </ResourceDictionary.MergedDictionaries>
-    </ResourceDictionary>
-  </Application.Resources>
+    </Application.Resources>
 
-  <Application.Styles>
-    <FluentTheme />
-    <DockFluentTheme DensityStyle="Normal" />
-    <Style Selector="DockControl">
-      <Setter Property="(recycling:ControlRecyclingDataTemplate.ControlRecycling)" Value="{StaticResource ControlRecyclingKey}" />
-    </Style>
-    <Style Selector="DocumentControl">
-      <Setter Property="HeaderTemplate">
-        <DataTemplate DataType="core:IDockable">
-          <TextBlock Text="{Binding Title}" Padding="4,0" />
-        </DataTemplate>
-      </Setter>
-    </Style>
-    <Style Selector="ToolControl">
-      <Setter Property="HeaderTemplate">
-        <DataTemplate DataType="core:IDockable">
-          <TextBlock Text="{Binding Title}" Padding="4,0" />
-        </DataTemplate>
-      </Setter>
-    </Style>
-  </Application.Styles>
+    <Application.Styles>
+        <FluentTheme />
+        <DockFluentTheme DensityStyle="Normal" />
+        <StyleInclude Source="avares://AcrfAnnotationTool/Controls/DataGrid/Themes/DataGridFilterPopup.axaml" />
+        <Style Selector="DocumentTabStrip">
+            <Setter Property="Background" Value="#FFF8FAFC" />
+            <Setter Property="Padding" Value="2,1" />
+            <Setter Property="MinHeight" Value="24" />
+        </Style>
+        <Style Selector="DocumentTabStripItem">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="Foreground" Value="#FF64748B" />
+            <Setter Property="BorderBrush" Value="Transparent" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="CornerRadius" Value="4" />
+            <Setter Property="Padding" Value="4,0" />
+            <Setter Property="Margin" Value="4" />
+            <Setter Property="FontSize" Value="14" />
+            <Setter Property="FontWeight" Value="Normal" />
+            <Setter Property="VerticalContentAlignment" Value="Center" />
+        </Style>
+        <Style Selector="DocumentTabStripItem:not(:active):selected">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="BorderBrush" Value="Transparent" />
+            <Setter Property="Foreground" Value="#FF64748B" />
+        </Style>
+        <Style Selector="DocumentTabStripItem:pointerover">
+            <Setter Property="Background" Value="#FFF5F9FF" />
+            <Setter Property="BorderBrush" Value="#FFD6E7FF" />
+            <Setter Property="Foreground" Value="#FF1677FF" />
+        </Style>
+        <Style Selector="DocumentTabStripItem:not(:active):selected:pointerover">
+            <Setter Property="Background" Value="#FFF5F9FF" />
+            <Setter Property="BorderBrush" Value="#FFD6E7FF" />
+            <Setter Property="Foreground" Value="#FF1677FF" />
+        </Style>
+        <Style Selector="DocumentTabStripItem:active">
+            <Setter Property="Background" Value="#FFEAF3FF" />
+            <Setter Property="Foreground" Value="#FF1677FF" />
+            <Setter Property="BorderBrush" Value="#FF9EC5FE" />
+            <Setter Property="BorderThickness" Value="1" />
+        </Style>
+        <Style Selector="DockControl">
+            <Setter Property="(recycling:ControlRecyclingDataTemplate.ControlRecycling)" Value="{StaticResource ControlRecyclingKey}" />
+        </Style>
+        <Style Selector="DocumentControl">
+            <Setter Property="HeaderTemplate">
+                <DataTemplate DataType="core:IDockable">
+                    <TextBlock Text="{Binding Title}" />
+                </DataTemplate>
+            </Setter>
+        </Style>
+        <Style Selector="ToolControl">
+            <Setter Property="HeaderTemplate">
+                <DataTemplate DataType="core:IDockable">
+                    <TextBlock Text="{Binding Title}" />
+                </DataTemplate>
+            </Setter>
+        </Style>
+    </Application.Styles>
 </Application>

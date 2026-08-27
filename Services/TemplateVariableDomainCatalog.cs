@@ -1,21 +1,17 @@
 ﻿using System.Collections.Frozen;
-using Microsoft.Data.Sqlite;
+using AcrfAnnotationTool.Services.Interface;
 
 namespace AcrfAnnotationTool.Services;
 
 public sealed class TemplateVariableDomainCatalog
 {
+    private readonly IDatabaseService _databaseService;
     private readonly Task<FrozenDictionary<string, string>> _loadTask;
 
-    private TemplateVariableDomainCatalog(string databasePath)
+    public TemplateVariableDomainCatalog(IDatabaseService databaseService)
     {
-        _loadTask = LoadAsync(databasePath);
-    }
-
-    public static TemplateVariableDomainCatalog StartFromApplicationDatabase()
-    {
-        var databasePath = Path.Combine(AppContext.BaseDirectory, "cdisc_setting.db");
-        return new TemplateVariableDomainCatalog(databasePath);
+        _databaseService = databaseService;
+        _loadTask = LoadAsync();
     }
 
     public Task<FrozenDictionary<string, string>> LoadingTask => _loadTask;
@@ -98,11 +94,11 @@ public sealed class TemplateVariableDomainCatalog
             yield return normalized[(separatorIndex + 1)..];
     }
 
-    public static async Task<FrozenDictionary<string, string>> LoadAsync(string databasePath)
+    private async Task<FrozenDictionary<string, string>> LoadAsync()
     {
         try
         {
-            return await Task.Run(() => LoadCore(databasePath)).ConfigureAwait(false);
+            return await Task.Run(LoadCore).ConfigureAwait(false);
         }
         catch
         {
@@ -110,37 +106,27 @@ public sealed class TemplateVariableDomainCatalog
         }
     }
 
-    private static FrozenDictionary<string, string> LoadCore(string databasePath)
+    private FrozenDictionary<string, string> LoadCore()
     {
-        if (!File.Exists(databasePath))
-            return CreateEmpty();
-
-        try
+        var domains = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var variable in _databaseService.QueryTemplateVariables())
         {
-            using var connection = new SqliteConnection($"Data Source={databasePath};Mode=ReadOnly");
-            connection.Open();
-            using var command = connection.CreateCommand();
-            command.CommandText = "SELECT DatasetName, VariableName FROM template_variable WHERE DatasetName IS NOT NULL AND VariableName IS NOT NULL ORDER BY Id";
+            var domain = variable.DatasetName?.Trim() ?? string.Empty;
+            var variableName = variable.VariableName?.Trim() ?? string.Empty;
+            if (string.IsNullOrWhiteSpace(domain) ||
+                string.IsNullOrWhiteSpace(variableName) ||
+                IsAssociatedPersonsDataset(domain))
+                continue;
 
-            var domains = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-            using var reader = command.ExecuteReader();
-            while (reader.Read())
-            {
-                var domain = reader.IsDBNull(0) ? string.Empty : reader.GetString(0).Trim();
-                var variableName = reader.IsDBNull(1) ? string.Empty : reader.GetString(1).Trim();
-                if (string.IsNullOrWhiteSpace(domain) || string.IsNullOrWhiteSpace(variableName))
-                    continue;
-
-                domains.TryAdd(variableName, domain);
-            }
-
-            return domains.ToFrozenDictionary(StringComparer.OrdinalIgnoreCase);
+            domains.TryAdd(variableName, domain);
         }
-        catch
-        {
-            return CreateEmpty();
-        }
+
+        return domains.ToFrozenDictionary(StringComparer.OrdinalIgnoreCase);
     }
+
+    private static bool IsAssociatedPersonsDataset(string name) =>
+        name.Length == 4 &&
+        name.StartsWith("AP", StringComparison.OrdinalIgnoreCase);
 
     private static FrozenDictionary<string, string> CreateEmpty() =>
         new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)

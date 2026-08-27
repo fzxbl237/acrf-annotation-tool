@@ -1,6 +1,9 @@
-﻿using AcrfAnnotationTool.ViewModels.Documents;
+﻿using AcrfAnnotationTool.Services;
+using AcrfAnnotationTool.Services.Interface;
+using AcrfAnnotationTool.ViewModels.Documents;
 using Dock.Model.Controls;
 using Dock.Model.Core;
+using Dock.Model.Core.Events;
 using Dock.Model.Mvvm;
 
 namespace AcrfAnnotationTool.ViewModels;
@@ -8,8 +11,31 @@ namespace AcrfAnnotationTool.ViewModels;
 public sealed class DockFactory : Factory
 {
     private readonly MainWindowViewModel _owner;
+    private readonly CdiscDatasetCatalog _cdiscDatasetCatalog;
+    private readonly SuggestionOptionsAsyncLoader _suggestionOptionsAsyncLoader;
+    private readonly IMessageService _messageService;
+    private bool _applicationClosing;
 
-    public DockFactory(MainWindowViewModel owner) => _owner = owner;
+    public DockFactory(
+        MainWindowViewModel owner,
+        CdiscDatasetCatalog cdiscDatasetCatalog,
+        SuggestionOptionsAsyncLoader suggestionOptionsAsyncLoader,
+        IMessageService messageService)
+    {
+        _owner = owner;
+        _cdiscDatasetCatalog = cdiscDatasetCatalog;
+        _suggestionOptionsAsyncLoader = suggestionOptionsAsyncLoader;
+        _messageService = messageService;
+        WindowClosing += OnWindowClosing;
+    }
+
+    public void BeginApplicationShutdown() => _applicationClosing = true;
+
+    private void OnWindowClosing(object? sender, WindowClosingEventArgs e)
+    {
+        if (!_applicationClosing)
+            e.Cancel = true;
+    }
 
     public override IRootDock CreateLayout()
     {
@@ -27,7 +53,11 @@ public sealed class DockFactory : Factory
 
     private AcrfDocumentViewModel CreateEditor(string id, string title, bool canClose)
     {
-        var editor = new AcrfDocumentViewModel(_owner.VariableDomainCatalog)
+        var editor = new AcrfDocumentViewModel(
+            _cdiscDatasetCatalog,
+            _owner.VariableDomainCatalog,
+            _suggestionOptionsAsyncLoader,
+            _messageService)
         {
             Id = id,
             Title = title,

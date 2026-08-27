@@ -2,7 +2,10 @@
 using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Interactivity;
+using Avalonia.Threading;
 using Avalonia.VisualTree;
+using AtomUI.Data;
+using AtomUI.Desktop.Controls;
 using AcrfAnnotationTool.Models;
 using AcrfAnnotationTool.ViewModels.Documents;
 using AtomContextMenu = AtomUI.Desktop.Controls.ContextMenu;
@@ -10,7 +13,7 @@ using AtomDialog = AtomUI.Desktop.Controls.Dialog;
 using AtomDialogButtonClickedEventArgs = AtomUI.Desktop.Controls.DialogButtonClickedEventArgs;
 using AtomDialogButtonRole = AtomUI.Desktop.Controls.DialogButtonRole;
 using AtomMenuItem = AtomUI.Desktop.Controls.MenuItem;
-using PatChes.Controls.DataGrid;
+using PatChesDataGridRow = PatChes.Controls.DataGrid.DataGridRow;
 
 namespace AcrfAnnotationTool.Views;
 
@@ -28,6 +31,32 @@ public partial class AnnotationToolView : UserControl
     {
         InitializeComponent();
         AnnotationGrid.AddHandler(PointerPressedEvent, OnAnnotationGridPointerPressed, RoutingStrategies.Tunnel);
+        DataContextChanged += OnDataContextChanged;
+        AttachedToVisualTree += OnAttachedToVisualTree;
+    }
+
+    private void OnDataContextChanged(object? sender, EventArgs e)
+    {
+        if (VisualRoot is not null)
+            AttachCurrentViewModel();
+    }
+
+    private void OnAttachedToVisualTree(object? sender, VisualTreeAttachmentEventArgs e)
+    {
+        AttachCurrentViewModel();
+    }
+
+    private void AttachCurrentViewModel()
+    {
+        if (DataContext is not AcrfDocumentViewModel viewModel)
+            return;
+
+        viewModel.AttachAnnotationGrid(AnnotationGrid);
+    }
+
+    protected override void OnDetachedFromVisualTree(VisualTreeAttachmentEventArgs e)
+    {
+        base.OnDetachedFromVisualTree(e);
     }
 
     private void OnAnnotationGridPointerPressed(object? sender, PointerPressedEventArgs e)
@@ -36,10 +65,10 @@ public partial class AnnotationToolView : UserControl
             return;
 
         var visual = e.Source as Visual;
-        while (visual is not null && visual is not DataGridRow)
+        while (visual is not null && visual is not PatChesDataGridRow)
             visual = visual.GetVisualParent();
 
-        if (visual is not DataGridRow row || row.DataContext is not Annotation annotation)
+        if (visual is not PatChesDataGridRow row || row.DataContext is not Annotation annotation)
             return;
         if (DataContext is not AcrfDocumentViewModel viewModel)
             return;
@@ -69,7 +98,7 @@ public partial class AnnotationToolView : UserControl
         e.Handled = true;
     }
 
-    private void OpenCoordinateDialog(DataGridRow row, CoordinateOperation operation)
+    private void OpenCoordinateDialog(PatChesDataGridRow row, CoordinateOperation operation)
     {
         _pendingCoordinateOperation = operation;
         CoordinateDialog.Title = GetCoordinateOperationTitle(operation);

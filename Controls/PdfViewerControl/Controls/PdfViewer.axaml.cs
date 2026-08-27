@@ -60,6 +60,7 @@ public partial class PdfViewer : UserControl
     public event EventHandler<AnnotationCreatedEventArgs>? AnnotationCreated;
     public event EventHandler<AnnotationDeletedEventArgs>? AnnotationDeleted;
     public event EventHandler<AnnotationChangedEventArgs>? AnnotationChanged;
+    public event EventHandler<AnnotationSelectedEventArgs>? AnnotationSelected;
     public event EventHandler? DocumentLoaded;
     public string? DocumentPath => _currentPdfPath;
     public int PageCount => _loader.PageCount;
@@ -162,6 +163,21 @@ public partial class PdfViewer : UserControl
                 ? $"Saved to: {target}" : "Annotations saved.");
         }
         catch (Exception ex) { SetStatus($"Save failed: {ex.Message}"); }
+    }
+
+    public void SaveAnnotationsFlattened(string dest)
+    {
+        if (string.IsNullOrEmpty(_currentPdfPath)) { SetStatus("Please open a PDF first."); return; }
+        try
+        {
+            SyncAllAnnotationModelsFromUi();
+            var exportAnnotations = _annotations
+                .Concat(GetDomainAnnotationModels())
+                .ToList();
+            PdfAnnotationService.SaveFreeTextAnnotationsFlattened(_currentPdfPath, dest, exportAnnotations);
+            SetStatus($"Flattened PDF saved to: {dest}");
+        }
+        catch (Exception ex) { SetStatus($"Flatten save failed: {ex.Message}"); }
     }
 
     private void BuildDocumentLayout(bool fullRebuild = true)
@@ -354,7 +370,7 @@ public partial class PdfViewer : UserControl
     {
         if (_pageSlots.Count == 0) return Array.Empty<int>();
         var vt = MainScrollViewer.Offset.Y; var vb = vt + MainScrollViewer.Bounds.Height;
-        int first = -1, last = -1; double cy = 0;
+        int first = -1, last = -1; double cy = 16;
         for (int i = 0; i < _pageSlots.Count; i++) { var h = GetPageHostHeight(i); if (cy + h > vt && cy < vb) { if (first < 0) first = i; last = i; } cy += h; }
         if (first < 0) first = last = Math.Clamp(_currentPageIndex, 0, _pageSlots.Count - 1);
         var s = Math.Max(0, first - buf); var e = Math.Min(_pageSlots.Count - 1, last + buf);
@@ -408,6 +424,9 @@ public partial class PdfViewer : UserControl
                 if (_selectedAnnotation != null) _selectedAnnotation.IsSelected = false;
                 _selectedAnnotation = c;
             }
+
+            if (c.Model?.Id is { Length: > 0 } annotationId)
+                AnnotationSelected?.Invoke(this, new AnnotationSelectedEventArgs(annotationId));
         }
         else if (_selectedAnnotation == c)
         {
@@ -432,7 +451,13 @@ public partial class PdfViewer : UserControl
     }
     private void MainScrollViewer_OnScrollChanged(object? s, ScrollChangedEventArgs e) { if (_loader.PageCount == 0 || _pageSlots.Count == 0) return; if (_suspendScrollPageTracking <= 0) UpdateCurrentPageIndexFromViewport(); ReleaseFramesOutsideVisible(); RequestVirtualization(); }
     private void UpdateCurrentPageIndexFromViewport() { if (_pageSlots.Count == 0) return; double cy = 16; var vc = MainScrollViewer.Offset.Y + MainScrollViewer.Bounds.Height / 2; int best = 0; for (int i = 0; i < _pageSlots.Count; i++) { var h = GetPageHostHeight(i); if (vc >= cy && vc < cy + h) { best = i; break; } if (vc >= cy + h) best = i; cy += h; } if (best != _currentPageIndex) { _currentPageIndex = best; UpdatePageInfo(); } }
-    private double GetPageHostHeight(int i) { var h = _pageSlots[i].Host; if (h.Bounds.Height > 0) return h.Bounds.Height; return _loader.PageSizes.Count > i ? _loader.PageSizes[i].Height + 20 : 800; }
+    private double GetPageHostHeight(int i)
+    {
+        var host = _pageSlots[i].Host;
+        if (host.Bounds.Height > 0)
+            return host.Bounds.Height + host.Margin.Top + host.Margin.Bottom;
+        return _loader.PageSizes.Count > i ? _loader.PageSizes[i].Height + 20 : 800;
+    }
     private void ScrollToPage(int pi) { if (pi < 0 || pi >= PagesPanel.Children.Count) return; double y = 16; for (int i = 0; i < pi && i < _pageSlots.Count; i++) y += GetPageHostHeight(i); MainScrollViewer.Offset = new Vector(MainScrollViewer.Offset.X, Math.Max(0, y - 8)); }
     private void UpdateZoomLabel() { if (ZoomLabel != null && ZoomSlider != null) ZoomLabel.Text = $"{(int)ZoomSlider.Value}%"; }
     private void UpdatePageInfo() { if (_loader.PageCount == 0) { PageInfoText.Text = "0 / 0"; PrevPageButton.IsEnabled = false; NextPageButton.IsEnabled = false; return; } PageInfoText.Text = $"{_currentPageIndex + 1} / {_loader.PageCount}"; PrevPageButton.IsEnabled = _currentPageIndex > 0; NextPageButton.IsEnabled = _currentPageIndex < _loader.PageCount - 1; }

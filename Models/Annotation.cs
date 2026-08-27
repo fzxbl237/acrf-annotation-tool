@@ -61,5 +61,8 @@ public sealed partial class Annotation : ObservableObject, ICloneable
     [property: ExcelColumnName("注释唯一标识")]
     private string _annotationUniqueId = Guid.NewGuid().ToString();
 
+    [ObservableProperty]
+    private bool _isSelected;
+
     public object Clone() => MemberwiseClone();
 }

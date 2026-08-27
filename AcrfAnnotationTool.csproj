@@ -28,7 +28,8 @@
     <PackageReference Include="AtomUI.Desktop.Controls" Version="6.1.5" />
     <PackageReference Include="AtomUI.Desktop.Controls.DataGrid" Version="6.1.5" />
     <PackageReference Include="DynamicData" Version="9.4.33" />
-    <PackageReference Include="Microsoft.Data.Sqlite" Version="8.0.1" />
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="10.0.0" />
+    <PackageReference Include="SqlSugarCore" Version="5.1.4.211-preview01" />
     <PackageReference Include="itext7" Version="9.7.0" />
     <None Update="cdisc_setting.db"
           CopyToOutputDirectory="PreserveNewest"

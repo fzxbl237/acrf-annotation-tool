@@ -11,5 +11,33 @@
     xmlns:views="using:AcrfAnnotationTool.Views"
     xmlns:vm="using:AcrfAnnotationTool.ViewModels"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
-    <views:MainView />
+    <Grid>
+        <views:MainView />
+        <atom:Dialog
+            HostMinWidth="420"
+            IsDragMovable="True"
+            IsModal="True"
+            x:Name="ShutdownExportDialog">
+            <StackPanel Spacing="14">
+                <TextBlock FontSize="16" FontWeight="SemiBold" Text="关闭前导出 Spec" />
+                <TextBlock Text="是否在关闭窗口前导出当前 Spec？" TextWrapping="Wrap" />
+                <TextBlock
+                    Foreground="#FFB91C1C"
+                    IsVisible="False"
+                    TextWrapping="Wrap"
+                    x:Name="ShutdownExportErrorText" />
+                <StackPanel HorizontalAlignment="Right" Orientation="Horizontal" Spacing="8">
+                    <atom:Button
+                        ButtonType="Text"
+                        Click="OnCancelShutdownClick"
+                        Content="取消" />
+                    <atom:Button Click="OnCloseWithoutExportClick" Content="直接关闭" />
+                    <atom:Button
+                        ButtonType="Primary"
+                        Click="OnExportAndCloseClick"
+                        Content="导出并关闭" />
+                </StackPanel>
+            </StackPanel>
+        </atom:Dialog>
+    </Grid>
 </atom:Window>

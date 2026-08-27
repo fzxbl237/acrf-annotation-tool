@@ -228,7 +228,8 @@ acrf-annotation-tool/
 - PDFsharp
 - Docnet.Core
 - MiniExcel
-- Microsoft.Data.Sqlite
+- SqlSugarCore
+- Microsoft.Extensions.DependencyInjection
 
 ## 说明
 

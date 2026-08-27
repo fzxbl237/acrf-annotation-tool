@@ -444,18 +444,22 @@ public class DataGridCell : Control
         else if (IsFrozenCell())
         {
             var grid = OwningRow?.OwningGrid;
-            _border.Background = OwningRow?.IsPointerOver == true
-                ? grid?.RowHoverBackground ?? Brushes.Transparent
-                : grid?.RowBackground ?? new SolidColorBrush(Colors.White);
+            _border.Background = OwningRow?.IsSelected == true
+                ? new SolidColorBrush(Color.Parse("#B7DBFF"))
+                : OwningRow?.IsPointerOver == true
+                    ? grid?.RowHoverBackground ?? Brushes.Transparent
+                    : grid?.RowBackground ?? new SolidColorBrush(Colors.White);
             _border.BorderBrush = new SolidColorBrush(Color.Parse("#E8E8E8"));
             _border.BorderThickness = new Thickness(0, 0, right, bottom);
         }
         else
         {
             var grid = OwningRow?.OwningGrid;
-            _border.Background = OwningRow?.IsPointerOver == true
-                ? grid?.RowHoverBackground ?? Brushes.Transparent
-                : Brushes.Transparent;
+            _border.Background = OwningRow?.IsSelected == true
+                ? new SolidColorBrush(Color.Parse("#B7DBFF"))
+                : OwningRow?.IsPointerOver == true
+                    ? grid?.RowHoverBackground ?? Brushes.Transparent
+                    : Brushes.Transparent;
             _border.BorderBrush = new SolidColorBrush(Color.Parse("#E8E8E8"));
             _border.BorderThickness = new Thickness(0, 0, right, bottom);
         }

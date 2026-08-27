@@ -85,6 +85,7 @@ public class DataGridAutoCompleteColumn : DataGridBoundColumn
             MinimumPrefixLength = 0,
             Filter = ValueFilterFactory.BuildFilter(ValueFilterMode.Contains),
             FilterValueSelector = ValueFilterPropertySelector
+            
         };
 
         BindUtils.RelayBind(this, OptionsAsyncLoaderProperty, autoComplete, AbstractAutoComplete.OptionsAsyncLoaderProperty);
@@ -147,7 +148,7 @@ public class DataGridAutoCompleteColumn : DataGridBoundColumn
     {
         if (data is IAutoCompleteOption option)
         {
-            return option.Content;
+            return option.Header;
         }
         return null;
     };
