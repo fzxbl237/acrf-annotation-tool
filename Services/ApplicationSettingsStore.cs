@@ -4,7 +4,9 @@ namespace AcrfAnnotationTool.Services;
 
 public sealed record ApplicationSettings(
     double DomainAnnotationHorizontalOffset,
-    double DomainAnnotationVerticalOffset);
+    double DomainAnnotationVerticalOffset,
+    bool? IsPdfAnnotationEditingEnabled = null,
+    bool Language = false);
 
 public static class ApplicationSettingsStore
 {
@@ -66,7 +68,8 @@ public static class ApplicationSettingsStore
 
     private static ApplicationSettings CreateDefault() => new(
         DefaultDomainAnnotationOffset,
-        DefaultDomainAnnotationOffset);
+        DefaultDomainAnnotationOffset,
+        false);
 
     private static bool IsValidOffset(double value) =>
         double.IsFinite(value) && value >= 0;

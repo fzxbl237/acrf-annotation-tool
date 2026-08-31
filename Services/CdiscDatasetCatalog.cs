@@ -4,18 +4,27 @@ namespace AcrfAnnotationTool.Services;
 
 public sealed class CdiscDatasetCatalog
 {
-    private readonly Dictionary<string, string> _labels;
+    private readonly Dictionary<string, Dictionary<string, string>> _labelsByLanguage =
+        new(StringComparer.OrdinalIgnoreCase);
+    private string _language = "en";
 
     public CdiscDatasetCatalog(IDatabaseService databaseService)
     {
-        var labels = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         try
         {
             foreach (var dataset in databaseService.QueryTemplateDatasets())
             {
                 var name = dataset.Name?.Trim() ?? string.Empty;
-                if (string.IsNullOrWhiteSpace(name) || IsAssociatedPersonsDataset(name))
+                var language = dataset.Language?.Trim() ?? string.Empty;
+                if (string.IsNullOrWhiteSpace(name) || string.IsNullOrWhiteSpace(language) ||
+                    IsAssociatedPersonsDataset(name))
                     continue;
+
+                if (!_labelsByLanguage.TryGetValue(language, out var labels))
+                {
+                    labels = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+                    _labelsByLanguage[language] = labels;
+                }
 
                 labels[name] = dataset.Label?.Trim() ?? string.Empty;
             }
@@ -24,9 +33,9 @@ public sealed class CdiscDatasetCatalog
         {
             // Keep application startup resilient when the optional settings database is unavailable.
         }
-
-        _labels = labels;
     }
+
+    public void SetLanguage(bool useChinese) => _language = useChinese ? "zh" : "en";
 
     private static bool IsAssociatedPersonsDataset(string name) =>
         name.Length == 4 &&
@@ -38,7 +47,10 @@ public sealed class CdiscDatasetCatalog
             return null;
 
         var name = domain.Trim();
-        var match = _labels.FirstOrDefault(pair =>
+        if (!_labelsByLanguage.TryGetValue(_language, out var labels))
+            labels = _labelsByLanguage.GetValueOrDefault("en") ?? new Dictionary<string, string>();
+
+        var match = labels.FirstOrDefault(pair =>
             string.Equals(pair.Key, name, StringComparison.OrdinalIgnoreCase));
         if (match.Key is null || string.IsNullOrWhiteSpace(match.Value))
             return name;

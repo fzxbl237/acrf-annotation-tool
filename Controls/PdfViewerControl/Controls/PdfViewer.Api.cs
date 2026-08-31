@@ -41,13 +41,18 @@ public partial class PdfViewer
 {
     private const double DomainAnnotationHeight = 20;
 
+    private bool UsesChineseAnnotationFont() =>
+        AnnotationFontFamily.Equals("Arial Unicode MS", StringComparison.OrdinalIgnoreCase);
+
+    private double GetDomainAnnotationHeight() => DomainAnnotationHeight;
+
     public IReadOnlyList<FreeTextAnnotationModel> GetAnnotations() => _annotations.AsReadOnly();
+
+    public string AnnotationFontFamily { get; set; } = "Arial";
 
     public IReadOnlyList<FreeTextAnnotationModel> GetDomainAnnotationModels() =>
         _pageSlots
-            .SelectMany(slot => slot.DomainAnnotations)
-            .Select(annotation => annotation.Model)
-            .OfType<FreeTextAnnotationModel>()
+            .SelectMany(slot => slot.DomainAnnotationModels)
             .ToList();
 
     public IEnumerable<FreeTextAnnotationModel> GetAnnotationsOnPage(int pageIndex) =>
@@ -76,14 +81,17 @@ public partial class PdfViewer
             PageIndex = pageIndex, PdfX = pdfX, PdfY = pdfY,
             Width = width, Height = height,
             Text = text ?? FreeTextAnnotationControl.DefaultPlaceholderText,
-            FontSize = fontSize
+            FontSize = fontSize,
+            FontFamily = AnnotationFontFamily,
+            IsBold = false
         };
         _annotations.Add(model);
 
         if (pageIndex < _pageSlots.Count)
         {
             var slot = _pageSlots[pageIndex];
-            AddAnnotationControl(model, pageHeightPoints, _loader.DisplayScale, slot.AnnotationLayer);
+            if (slot.AnnotationLayer is { } annotationLayer)
+                AddAnnotationControl(model, pageHeightPoints, _loader.DisplayScale, annotationLayer);
             if (scrollIntoView) ScrollAnnotationIntoView(model.Id);
             if (updateStatus) SetStatus($"Annotation created, page {pageIndex + 1}");
         }
@@ -128,17 +136,25 @@ public partial class PdfViewer
         if (model == null || pageIndex < 0 || pageIndex >= _loader.PageCount) return false;
         if (model.PageIndex != pageIndex && pageIndex >= 0 && pageIndex < _loader.PageCount)
         {
-            if (_annotationControls.TryGetValue(id, out var oldControl))
+            var wasSelected = false;
+            if (_annotationControls.Remove(id, out var oldControl))
             {
+                wasSelected = oldControl.IsSelected || ReferenceEquals(_selectedAnnotation, oldControl);
                 var oldSlot = _pageSlots.ElementAtOrDefault(model.PageIndex);
-                if (oldSlot?.AnnotationLayer is PageAnnotationCanvas oldPac) oldPac.UnhookAnnotation(oldControl);
-                oldSlot?.AnnotationLayer.Children.Remove(oldControl);
+                if (oldSlot?.AnnotationLayer is { } oldLayer)
+                {
+                    oldLayer.UnhookAnnotation(oldControl);
+                    oldLayer.Children.Remove(oldControl);
+                }
             }
             model.PageIndex = pageIndex;
-            if (pageIndex < _pageSlots.Count)
+            if (wasSelected)
+                MountPageContent(_pageSlots[pageIndex]);
+            if (pageIndex < _pageSlots.Count && _pageSlots[pageIndex].AnnotationLayer is { } newLayer)
             {
-                var newSlot = _pageSlots[pageIndex];
-                AddAnnotationControl(model, _loader.GetPageHeightInPoints(pageIndex), _loader.DisplayScale, newSlot.AnnotationLayer);
+                AddAnnotationControl(model, _loader.GetPageHeightInPoints(pageIndex), _loader.DisplayScale, newLayer);
+                if (wasSelected && _annotationControls.TryGetValue(id, out var newControl))
+                    DoSelectAnnotation(newControl);
             }
         }
         var php = _loader.GetPageHeightInPoints(pageIndex);
@@ -180,33 +196,55 @@ public partial class PdfViewer
     public void ReplaceAnnotations(IEnumerable<FreeTextAnnotationModel> annotations)
     {
         _annotations.Clear();
-        _annotations.AddRange(annotations);
+        foreach (var annotation in annotations)
+            _annotations.Add(annotation);
         _annotationControls.Clear();
         _selectedAnnotation = null;
 
         foreach (var slot in _pageSlots)
         {
+            if (slot.AnnotationLayer is not { } annotationLayer)
+                continue;
             var pageHeightPoints = _loader.GetPageHeightInPoints(slot.PageIndex);
             RebuildAnnotationsForPage(
                 slot.PageIndex,
                 pageHeightPoints,
                 _loader.DisplayScale,
-                slot.AnnotationLayer);
+                annotationLayer);
         }
     }
 
     public bool SelectAnnotationById(string id)
     {
-        if (!_annotationControls.TryGetValue(id, out var control)) return false;
+        var model = _annotations.FirstOrDefault(annotation => annotation.Id == id);
+        if (model is null || model.PageIndex < 0 || model.PageIndex >= _pageSlots.Count)
+            return false;
+        var slot = _pageSlots[model.PageIndex];
+        MountPageContent(slot);
+        if (!_annotationControls.TryGetValue(id, out var control))
+            return false;
         DoSelectAnnotation(control);
-        _currentPageIndex = control.Model?.PageIndex ?? 0;
+        _currentPageIndex = model.PageIndex;
         UpdatePageInfo();
         ScrollToPage(_currentPageIndex);
+        RequestVirtualizationImmediate();
         return true;
     }
 
     public string? GetSelectedAnnotationId() => _selectedAnnotation?.Model?.Id;
     public void ClearAnnotationSelection() => ClearSelection();
+
+    public bool ScrollToPageNumber(int pageNumber)
+    {
+        var pageIndex = pageNumber - 1;
+        if (pageIndex < 0 || pageIndex >= _pageSlots.Count)
+            return false;
+
+        _currentPageIndex = pageIndex;
+        UpdatePageInfo();
+        ScrollToPage(pageIndex);
+        return true;
+    }
     public int GetAnnotationCount() => _annotations.Count;
     public int GetAnnotationCountOnPage(int pageIndex) => _annotations.Count(a => a.PageIndex == pageIndex);
 
@@ -231,11 +269,9 @@ public partial class PdfViewer
         var x = horizontalOffset / scale;
         var top = verticalOffset / scale;
 
-        if (slot.DomainAnnotations.Count != visibleDisplays.Count)
+        if (slot.DomainAnnotationModels.Count != visibleDisplays.Count)
         {
-            slot.DomainAnnotationLayer.Children.Clear();
-            slot.DomainAnnotations.Clear();
-
+            slot.DomainAnnotationModels.Clear();
             for (var i = 0; i < visibleDisplays.Count; i++)
             {
                 var display = visibleDisplays[i];
@@ -244,54 +280,46 @@ public partial class PdfViewer
                     Id = $"__domain_{pageIndex}_{i}",
                     PageIndex = pageIndex,
                     PdfX = x,
-                    PdfY = pageHeightPoints - top - DomainAnnotationHeight,
+                    PdfY = pageHeightPoints - top - GetDomainAnnotationHeight(),
                     Width = GetDomainAnnotationWidth(display.Width, x, pageWidthPoints, scale),
-                    Height = DomainAnnotationHeight,
+                    Height = GetDomainAnnotationHeight(),
                     Text = display.Text,
                     FontSize = 10,
-                    FontFamily = "Arial",
-                    IsBold = true,
+                    FontFamily = AnnotationFontFamily,
+                    IsBold = !UsesChineseAnnotationFont(),
                     VerticalTextAlignment = AnnotationVerticalTextAlignment.Center,
                     FontColorHex = "#FF000000",
                     BackgroundColorHex = display.BackgroundColorHex,
                     BorderStyle = AnnotationBorderStyle.Solid
                 };
-                var annotation = new FreeTextAnnotationControl
-                {
-                    Model = model,
-                    IsVisible = true,
-                    IsHitTestVisible = false,
-                    Focusable = false,
-                    ZIndex = 3
-                };
-                annotation.ApplyLayoutFromPdf(pageHeightPoints, scale);
-                slot.DomainAnnotationLayer.Children.Add(annotation);
-                slot.DomainAnnotations.Add(annotation);
+                slot.DomainAnnotationModels.Add(model);
                 x += model.Width + 4 / scale;
             }
-
+            RebuildDomainAnnotationControls(slot);
             return;
         }
 
         for (var i = 0; i < visibleDisplays.Count; i++)
         {
             var display = visibleDisplays[i];
-            var annotation = slot.DomainAnnotations[i];
-            if (annotation.Model is not { } model)
-                continue;
-
+            var model = slot.DomainAnnotationModels[i];
             model.Text = display.Text;
-            model.FontFamily = "Arial";
+            model.FontFamily = AnnotationFontFamily;
             model.BackgroundColorHex = display.BackgroundColorHex;
-            model.IsBold = true;
+            model.IsBold = !UsesChineseAnnotationFont();
             model.VerticalTextAlignment = AnnotationVerticalTextAlignment.Center;
             model.Width = GetDomainAnnotationWidth(display.Width, x, pageWidthPoints, scale);
-            model.Height = DomainAnnotationHeight;
+            model.Height = GetDomainAnnotationHeight();
             model.PdfX = x;
             model.PdfY = pageHeightPoints - top - model.Height;
-            annotation.IsVisible = true;
-            annotation.IsHitTestVisible = false;
-            annotation.ApplyLayoutFromPdf(pageHeightPoints, scale);
+            if (i < slot.DomainAnnotations.Count)
+            {
+                var annotation = slot.DomainAnnotations[i];
+                annotation.IsVisible = true;
+                annotation.IsHitTestVisible = false;
+                annotation.ApplyLayoutFromPdf(pageHeightPoints, scale);
+                annotation.ApplyModelToUi();
+            }
             x += model.Width + 4 / scale;
         }
     }
@@ -304,21 +332,27 @@ public partial class PdfViewer
 
     public bool ScrollAnnotationIntoView(string id)
     {
-        if (!_annotationControls.TryGetValue(id, out var control) || control.Model == null) return false;
-        var model = control.Model;
+        var model = _annotations.FirstOrDefault(annotation => annotation.Id == id);
+        if (model is null) return false;
         var pageIndex = model.PageIndex;
         if (pageIndex < 0 || pageIndex >= _pageSlots.Count) return false;
+        MountPageContent(_pageSlots[pageIndex]);
         double y = 16;
         for (int i = 0; i < pageIndex && i < _pageSlots.Count; i++) y += GetPageHostHeight(i);
-        var annotationTop = Canvas.GetTop(control);
+        var annotationTop = _annotationControls.TryGetValue(id, out var control)
+            ? Canvas.GetTop(control)
+            : PdfCoordinateConverter.PdfToAvalonia(model.PdfX, model.PdfY, model.Height, _loader.GetPageHeightInPoints(pageIndex), _loader.DisplayScale).Y;
         if (double.IsNaN(annotationTop)) annotationTop = 0;
-        var annotationHeight = AnnotationAdornerService.GetAnnotationSize(control).Height;
+        var annotationHeight = control is not null
+            ? AnnotationAdornerService.GetAnnotationSize(control).Height
+            : PdfCoordinateConverter.PointsToPixels(model.Height, _loader.DisplayScale);
         var center = y + annotationTop + annotationHeight / 2;
         var vpH = MainScrollViewer.Bounds.Height;
         var off = Math.Max(0, center - vpH / 2);
         MainScrollViewer.Offset = new Vector(MainScrollViewer.Offset.X, Math.Min(off, MainScrollViewer.Extent.Height));
         _currentPageIndex = pageIndex;
         UpdatePageInfo();
+        RequestVirtualizationImmediate();
         return true;
     }
 
@@ -352,8 +386,8 @@ public partial class PdfViewer
         if (!removed) return false;
         if (_annotationControls.Remove(id, out var control))
         {
-            var layer = _pageSlots.Select(s => s.AnnotationLayer).FirstOrDefault(c => c.Children.Contains(control));
-            if (layer is PageAnnotationCanvas pac) pac.UnhookAnnotation(control);
+            var layer = _pageSlots.Select(s => s.AnnotationLayer).OfType<PageAnnotationCanvas>().FirstOrDefault(c => c.Children.Contains(control));
+            layer?.UnhookAnnotation(control);
             layer?.Children.Remove(control);
         }
         if (_selectedAnnotation?.Model?.Id == id) _selectedAnnotation = null;

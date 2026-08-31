@@ -76,20 +76,28 @@ public class DataGridAutoCompleteColumn : DataGridBoundColumn
 
     protected override Control? GenerateEditingElementDirect(DataGridCell cell, object? dataItem)
     {
-        var autoComplete = new DataGridAutoComplete
+        var autoComplete = new DataGridAutoComplete()
         {
             HorizontalAlignment = HorizontalAlignment.Stretch,
             VerticalAlignment = VerticalAlignment.Stretch,
             Margin = new Thickness(0),
             IsPopupMatchSelectWidth = true,
             MinimumPrefixLength = 0,
-            Filter = ValueFilterFactory.BuildFilter(ValueFilterMode.Contains),
-            FilterValueSelector = ValueFilterPropertySelector
-            
+            ShouldUseOverlayPopup = true
         };
+        
+        if (OptionsAsyncLoader is null)
+        {
+            autoComplete.Filter = ValueFilterFactory.BuildFilter(ValueFilterMode.Contains);
+            autoComplete.FilterValueSelector = ValueFilterPropertySelector;
+        }
+        else
+        {
+            autoComplete.Filter = PassThroughFilter;
+        }
 
         BindUtils.RelayBind(this, OptionsAsyncLoaderProperty, autoComplete, AbstractAutoComplete.OptionsAsyncLoaderProperty);
-        BindUtils.RelayBind(this, OptionsSourceProperty, autoComplete, AbstractAutoComplete.OptionsSourceProperty);      
+        BindUtils.RelayBind(this, OptionsSourceProperty, autoComplete, AbstractAutoComplete.OptionsSourceProperty);
         BindUtils.RelayBind(this, OptionTemplateProperty, autoComplete, AbstractAutoComplete.OptionTemplateProperty);
 
         return autoComplete;
@@ -153,9 +161,25 @@ public class DataGridAutoCompleteColumn : DataGridBoundColumn
         return null;
     };
 
+    private static readonly IValueFilter PassThroughFilter = new PassThroughValueFilter();
+
+    private sealed class PassThroughValueFilter : IValueFilter
+    {
+        public ValueFilterMode Mode => ValueFilterMode.Custom;
+
+        public bool Filter(object? value, object? filterValue) => true;
+    }
+
     private sealed class DataGridAutoComplete : AtomAutoComplete
     {
         protected override System.Type StyleKeyOverride => typeof(AtomAutoComplete);
+
+        protected override void OnInitialized()
+        {
+            base.OnInitialized();
+            if (OptionsAsyncLoader != null)
+                Filter = PassThroughFilter;
+        }
 
         protected override void OnApplyTemplate(TemplateAppliedEventArgs e)
         {

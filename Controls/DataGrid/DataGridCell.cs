@@ -174,9 +174,20 @@ public class DataGridCell : Control
     /// </summary>
     public void BeginEdit(RoutedEventArgs? editingEventArgs = null)
     {
-        if (Column == null || Column.IsReadOnly || IsEditing) return;
+        AutoCompleteDiagnostics.Log($"Cell.BeginEdit.start cell={GetHashCode():X8} column={Column?.GetType().Name ?? "<null>"} dataItem={DataItem?.GetType().Name ?? "<null>"} readOnly={Column?.IsReadOnly ?? false} editing={IsEditing}");
+        if (Column == null || Column.IsReadOnly || IsEditing)
+        {
+            AutoCompleteDiagnostics.Log($"Cell.BeginEdit.skip cell={GetHashCode():X8} reason=invalid-state");
+            return;
+        }
+
         _editingElement = Column.GenerateEditingElement(this, DataItem);
-        if (_editingElement == null) return;
+        AutoCompleteDiagnostics.Log($"Cell.BeginEdit.generated cell={GetHashCode():X8} element={_editingElement?.GetType().Name ?? "<null>"}");
+        if (_editingElement == null)
+        {
+            AutoCompleteDiagnostics.Log($"Cell.BeginEdit.skip cell={GetHashCode():X8} reason=no-editing-element");
+            return;
+        }
 
         // Suppress TextBox/ComboBox built-in DataValidationErrors display (red border + error text).
         // Apply a class so the style-based selectors in PatChes.Controls.DataGridThemes.axaml take effect.
@@ -190,15 +201,19 @@ public class DataGridCell : Control
         }
 
         _uneditedValue = Column.PrepareCellForEdit(_editingElement, editingEventArgs);
+        AutoCompleteDiagnostics.Log($"Cell.BeginEdit.prepared cell={GetHashCode():X8} uneditedType={_uneditedValue?.GetType().Name ?? "<null>"} border={_border != null}");
 
         // During editing, bypass the grid and put editing element directly in the border
         if (_border != null)
         {
+            _border.ClipToBounds = Column is not DataGridAutoCompleteColumn;
             _border.Child = _editingElement;
             ContentControl = _editingElement;
+            AutoCompleteDiagnostics.Log($"Cell.BeginEdit.mounted cell={GetHashCode():X8} borderChild={_border.Child.GetType().Name}");
         }
         IsEditing = true;
-        _editingElement.Focus();
+        var focused = _editingElement.Focus();
+        AutoCompleteDiagnostics.Log($"Cell.BeginEdit.focused cell={GetHashCode():X8} returned={focused} editing={IsEditing} elementFocused={_editingElement.IsFocused} elementFocusWithin={_editingElement.IsKeyboardFocusWithin}");
     }
 
     /// <summary>
@@ -206,7 +221,9 @@ public class DataGridCell : Control
     /// </summary>
     public object? CommitEdit()
     {
-        if (!IsEditing || _editingElement == null || Column == null) return null;
+        if (!IsEditing || _editingElement == null || Column == null)
+            return null;
+
         var value = Column.CommitCellEdit(_editingElement);
         IsEditing = false;
         SwapToDisplayElement();
@@ -218,7 +235,9 @@ public class DataGridCell : Control
     /// </summary>
     public void CancelEdit()
     {
-        if (!IsEditing || _editingElement == null || Column == null) return;
+        if (!IsEditing || _editingElement == null || Column == null)
+            return;
+
         Column.CancelCellEdit(_editingElement, _uneditedValue);
         IsEditing = false;
         SwapToDisplayElement();
@@ -227,6 +246,7 @@ public class DataGridCell : Control
     private void SwapToDisplayElement()
     {
         if (_border == null) return;
+        _border.ClipToBounds = true;
         _displayElement = Column?.GenerateElement(this, DataItem);
         if (_displayElement != null && Column != null && DataItem != null)
         {
@@ -254,6 +274,12 @@ public class DataGridCell : Control
         base.OnAttachedToVisualTree(e);
         EnsureBuilt();
         AddHandler(DoubleTappedEvent, OnDoubleTapped);
+    }
+
+    protected override void OnDetachedFromVisualTree(VisualTreeAttachmentEventArgs e)
+    {
+        RemoveHandler(DoubleTappedEvent, OnDoubleTapped);
+        base.OnDetachedFromVisualTree(e);
     }
 
     protected override void OnPointerPressed(PointerPressedEventArgs e)

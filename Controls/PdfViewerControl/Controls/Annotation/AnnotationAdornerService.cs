@@ -2,6 +2,7 @@
 using Avalonia.Controls;
 using Avalonia.Controls.Shapes;
 using Avalonia.Media;
+using Avalonia.VisualTree;
 using System.Collections.Generic;
 using PdfViewerControl.Controls;
 
@@ -14,7 +15,7 @@ internal static class AnnotationAdornerService
 
     public static void SetSelected(FreeTextAnnotationControl c, bool s) { if (s) EnsureVisible(c); else Hide(c); }
     public static void UpdateAdornerState(FreeTextAnnotationControl c) { if (c.IsSelected || _pointerOver.GetValueOrDefault(c)) EnsureVisible(c); else Hide(c); }
-    public static void SetPointerOver(FreeTextAnnotationControl c, bool o) { _pointerOver[c] = o; UpdateAdornerState(c); }
+    public static void SetPointerOver(FreeTextAnnotationControl c, bool o) { if (o) _pointerOver[c] = true; else _pointerOver.Remove(c); UpdateAdornerState(c); }
     public static void Refresh(FreeTextAnnotationControl c) { if (c.IsSelected) EnsureVisible(c); }
     public static void RebindSelectedAdorner(FreeTextAnnotationControl c) => Refresh(c);
     public static void SyncAdornerLayerPosition(FreeTextAnnotationControl c) { if (_overlays.TryGetValue(c, out var o)) o.UpdatePosition(c); }
@@ -29,6 +30,7 @@ internal static class AnnotationAdornerService
 
     public static AnnotationResizeHandleKind? TryGetResizeHandle(FreeTextAnnotationControl ann, Point canvasPoint)
     {
+        if (!ann.IsAnnotationEditingEnabled) return null;
         var left = Canvas.GetLeft(ann); var top = Canvas.GetTop(ann);
         if (double.IsNaN(left)) left = 0; if (double.IsNaN(top)) top = 0;
         var size = GetAnnotationSize(ann);
@@ -61,6 +63,7 @@ internal static class AnnotationAdornerService
     private static void TryCreate(FreeTextAnnotationControl c)
     {
         if (c.Parent is not Canvas parent) return;
+        if (!parent.IsAttachedToVisualTree()) return;
         if (_overlays.TryGetValue(c, out var ex)) { ex.UpdatePosition(c); return; }
         var o = new AnnotationOverlay(); parent.Children.Add(o); _overlays[c] = o; o.UpdatePosition(c);
     }
@@ -69,12 +72,47 @@ internal static class AnnotationAdornerService
     {
         if (_overlays.TryGetValue(c, out var o))
         {
-            if (o.Parent is Canvas p)
+            if (o.Parent is Canvas p && p.IsAttachedToVisualTree())
             {
                 try { p.Children.Remove(o); } catch (InvalidOperationException) { }
             }
             _overlays.Remove(c);
         }
+    }
+
+    public static void Cleanup(FreeTextAnnotationControl c)
+    {
+        Hide(c);
+        _pointerOver.Remove(c);
+    }
+
+    /// <summary>Drop overlay tracking for a canvas without mutating its visual tree.</summary>
+    public static void CleanupCanvas(Canvas canvas)
+    {
+        List<FreeTextAnnotationControl>? overlayKeys = null;
+        foreach (var kv in _overlays)
+        {
+            if (ReferenceEquals(kv.Value.Parent, canvas) || ReferenceEquals(kv.Key.Parent, canvas))
+                (overlayKeys ??= new List<FreeTextAnnotationControl>()).Add(kv.Key);
+        }
+        if (overlayKeys != null)
+        {
+            foreach (var c in overlayKeys)
+            {
+                _overlays.Remove(c);
+                _pointerOver.Remove(c);
+            }
+        }
+
+        List<FreeTextAnnotationControl>? pointerKeys = null;
+        foreach (var c in _pointerOver.Keys)
+        {
+            if (ReferenceEquals(c.Parent, canvas))
+                (pointerKeys ??= new List<FreeTextAnnotationControl>()).Add(c);
+        }
+        if (pointerKeys == null) return;
+        foreach (var c in pointerKeys)
+            _pointerOver.Remove(c);
     }
 
     /// <summary>Clear all overlay references without modifying visual tree (safe to call during detach).</summary>

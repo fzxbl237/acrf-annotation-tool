@@ -1425,6 +1425,8 @@ public class DataGrid : TemplatedControl
         row.DataContext = item;
         foreach (var cell in row.Cells)
         {
+            if (cell.IsEditing)
+                cell.CancelEdit();
             cell.DataItem = item;
             if (cell.Column != null)
                 cell.Width = cell.Column.GetEffectiveWidth();
@@ -1433,6 +1435,12 @@ public class DataGrid : TemplatedControl
 
     private void ReturnRowToPool(DataGridRow row)
     {
+        foreach (var cell in row.Cells)
+        {
+            if (cell.IsEditing)
+                cell.CancelEdit();
+        }
+
         var currentCellInRow = row.Cells.Any(cell => ReferenceEquals(cell, _currentCell));
 
         if (currentCellInRow && _currentCell?.Column is { } column)
@@ -1549,31 +1557,87 @@ public class DataGrid : TemplatedControl
 
     internal int GetItemCount() => GetItemsList().Count;
 
+    private int _filterUpdateDepth;
+
     internal void OnFilterChanged(DataGridColumn column)
     {
-        _verticalOffset = 0;
-        SelectedIndex = -1;
-        _selectionAnchorIndex = -1;
+        if (_filterUpdateDepth > 0)
+            return;
+
+        ApplyFilterChange();
+    }
+
+    public void ClearAllFilters()
+    {
+        var changed = false;
+        _filterUpdateDepth++;
+        try
+        {
+            foreach (var column in Columns)
+            {
+                if (!column.IsFiltered)
+                    continue;
+                column.ClearFilterSilent();
+                changed = true;
+            }
+        }
+        finally
+        {
+            _filterUpdateDepth--;
+        }
+
+        if (changed)
+            ApplyFilterChange();
+    }
+
+    private void ApplyFilterChange()
+    {
+        EndEditBeforeLayoutChange();
+        var selectedItem = SelectedItem ?? FindSelectedItem();
         _currentRow = null;
         ClearPendingCurrentCellRestore();
         _currentCell = null;
-        _realizedRows.Clear();
-        _realizedFirstIndex = -1;
-        _realizedLastIndex = -1;
         ClearSelectedCells();
-        if (_scrollPanel != null)
-        {
-            for (int i = _scrollPanel.Children.Count - 1; i >= 0; i--)
-            {
-                if (_scrollPanel.Children[i] is DataGridRow row)
-                    _scrollPanel.Children.RemoveAt(i);
-            }
-        }
+        ClearRows();
         InvalidateItemsCache();
+
+        var selectedIndex = selectedItem is null ? -1 : FindItemIndex(selectedItem);
+        SelectedIndex = selectedIndex;
+        _selectionAnchorIndex = selectedIndex;
+
         UpdateStatusBar();
         UpdateScrollBars();
         UpdateViewport();
-        BuildHeaders();
+        RefreshFilterIcons();
+
+        if (selectedItem is not null)
+            ScrollIntoView(selectedItem);
+    }
+
+    private object? FindSelectedItem()
+    {
+        if (ItemsSource == null)
+            return null;
+
+        foreach (var item in ItemsSource.Cast<object>())
+        {
+            if (IsItemSelected(item))
+                return item;
+        }
+
+        return null;
+    }
+
+    private void RefreshFilterIcons()
+    {
+        if (_headersPresenter == null)
+            return;
+
+        foreach (var child in _headersPresenter.Children)
+        {
+            if (child is DataGridColumnHeader header)
+                header.RefreshFilterIcon();
+        }
     }
 
     private void OnRowPointerPressed(object? sender, PointerPressedEventArgs e)
@@ -2284,17 +2348,34 @@ public class DataGrid : TemplatedControl
         if (start == null)
             return;
 
-        var rows = text.Replace("\r\n", "\n").Replace('\r', '\n').Split('\n');
+        var normalizedText = text.Replace("\r\n", "\n").Replace('\r', '\n');
+        if (normalizedText.EndsWith('\n'))
+            normalizedText = normalizedText[..^1];
+        var sourceRows = normalizedText
+            .Split('\n')
+            .Select(row => row.Split('\t'))
+            .ToArray();
+        var sourceColumnCount = sourceRows.Max(row => row.Length);
+        var fillSelection = _selectedCells.Count > 1;
+        var targetRowCount = fillSelection
+            ? _selectedCells.Max(position => position.RowIndex) - start.Value.RowIndex + 1
+            : sourceRows.Length;
+        var targetColumnCount = fillSelection
+            ? _selectedCells.Max(position => position.ColumnIndex) - start.Value.ColumnIndex + 1
+            : sourceColumnCount;
         var items = GetItemsList();
         var changedPositions = new List<DataGridCellPosition>();
 
-        for (var rowOffset = 0; rowOffset < rows.Length; rowOffset++)
+        for (var rowOffset = 0; rowOffset < targetRowCount; rowOffset++)
         {
-            var values = rows[rowOffset].Split('\t');
-            for (var columnOffset = 0; columnOffset < values.Length; columnOffset++)
+            var sourceValues = sourceRows[rowOffset % sourceRows.Length];
+            for (var columnOffset = 0; columnOffset < targetColumnCount; columnOffset++)
             {
                 var rowIndex = start.Value.RowIndex + rowOffset;
                 var columnIndex = start.Value.ColumnIndex + columnOffset;
+                var position = new DataGridCellPosition(rowIndex, columnIndex);
+                if (fillSelection && !_selectedCells.Contains(position))
+                    continue;
                 if (rowIndex < 0 || rowIndex >= items.Count || columnIndex < 0 || columnIndex >= Columns.Count)
                     continue;
 
@@ -2306,15 +2387,19 @@ public class DataGrid : TemplatedControl
                     continue;
 
                 var property = item.GetType().GetProperty(boundColumn.BindingPath);
+                var sourceColumnIndex = columnOffset % sourceColumnCount;
+                var clipboardValue = sourceColumnIndex < sourceValues.Length
+                    ? sourceValues[sourceColumnIndex]
+                    : string.Empty;
                 if (property?.CanWrite != true ||
-                    !TryConvertClipboardValue(values[columnOffset], property.PropertyType, out var convertedValue))
+                    !TryConvertClipboardValue(clipboardValue, property.PropertyType, out var convertedValue))
                     continue;
 
                 if (Equals(property.GetValue(item), convertedValue))
                     continue;
 
                 property.SetValue(item, convertedValue);
-                changedPositions.Add(new DataGridCellPosition(rowIndex, columnIndex));
+                changedPositions.Add(position);
             }
         }
 
@@ -2497,9 +2582,30 @@ public class DataGrid : TemplatedControl
         }
     }
 
+    internal void EndEditBeforeLayoutChange()
+    {
+        if (_isEditing && _currentCell != null)
+            CommitEdit();
+
+        if (_isEditing && _currentCell != null)
+            CancelEdit();
+
+        _isEditing = false;
+        if (_currentCell is { IsEditing: true })
+            _currentCell.CancelEdit();
+    }
+
     public void CommitEdit()
     {
-        if (!_isEditing || _currentCell == null) return;
+        if (!_isEditing)
+        {
+            return;
+        }
+        if (_currentCell == null)
+        {
+            _isEditing = false;
+            return;
+        }
         var cell = _currentCell;
         var args = new DataGridCellEditEndingEventArgs(cell, cell.Column, DataGridEditAction.Commit);
         CellEditEnding?.Invoke(this, args);
@@ -2508,7 +2614,6 @@ public class DataGrid : TemplatedControl
         var value = cell.CommitEdit();
         CommitCellValue(cell, value);
         SetCurrentCell(cell);
-
     }
 
     internal void OnComboBoxDropDownClosed()
@@ -2617,7 +2722,15 @@ public class DataGrid : TemplatedControl
 
     public void CancelEdit()
     {
-        if (!_isEditing || _currentCell == null) return;
+        if (!_isEditing)
+        {
+            return;
+        }
+        if (_currentCell == null)
+        {
+            _isEditing = false;
+            return;
+        }
         var args = new DataGridCellEditEndingEventArgs(_currentCell, _currentCell.Column, DataGridEditAction.Cancel);
         CellEditEnding?.Invoke(this, args);
         _currentCell.CancelEdit();

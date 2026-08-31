@@ -86,9 +86,31 @@
                                 ScrollViewer.HorizontalScrollBarVisibility="Auto"
                                 ScrollViewer.VerticalScrollBarVisibility="Auto"
                                 x:Name="PART_FilterList">
+                                <atom:ListBox.ItemsPanel>
+                                    <ItemsPanelTemplate>
+                                        <VirtualizingStackPanel />
+                                    </ItemsPanelTemplate>
+                                </atom:ListBox.ItemsPanel>
                                 <atom:ListBox.ItemTemplate>
-                                    <DataTemplate>
-                                        <ContentPresenter Content="{Binding}" />
+                                    <DataTemplate x:DataType="minidg:DataGridFilterItem">
+                                        <Border
+                                            Cursor="Hand"
+                                            Padding="10,3">
+                                            <StackPanel
+                                                Orientation="Horizontal"
+                                                Spacing="6">
+                                                <atom:CheckBox
+                                                    IsChecked="{Binding IsChecked, Mode=TwoWay}"
+                                                    IsHitTestVisible="False"
+                                                    VerticalAlignment="Center" />
+                                                <TextBlock
+                                                    FontSize="13"
+                                                    Foreground="{StaticResource TextPrimary}"
+                                                    Text="{Binding DisplayText}"
+                                                    TextWrapping="NoWrap"
+                                                    VerticalAlignment="Center" />
+                                            </StackPanel>
+                                        </Border>
                                     </DataTemplate>
                                 </atom:ListBox.ItemTemplate>
                             </atom:ListBox>

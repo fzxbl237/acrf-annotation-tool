@@ -14,7 +14,7 @@ using PdfViewerControl.Services;
 
 namespace PdfViewerControl.Controls;
 
-public partial class PdfViewer : UserControl
+public partial class PdfViewer : UserControl, IDisposable
 {
     private readonly PdfDocumentLoader _loader = new();
     private readonly List<FreeTextAnnotationModel> _annotations = new();
@@ -30,12 +30,14 @@ public partial class PdfViewer : UserControl
     private readonly object _slotLoadGate = new();
     private bool _virtualizeRunning, _virtualizePending;
     private DispatcherTimer? _virtualizeScrollTimer;
-    private readonly SemaphoreSlim _pageRenderSemaphore = new(2, 2);
+    private readonly SemaphoreSlim _pageRenderSemaphore = new(1, 1);
     private bool _suppressSliderZoomSchedule;
     private CancellationTokenSource? _loadCts;
     private int _layoutGeneration;
     private const int PageSlotsPerUiBatch = 4;
     private int _suspendScrollPageTracking;
+    private bool _isAnnotationEditingEnabled;
+    private bool _disposed;
 
     public PdfViewer()
     {
@@ -66,9 +68,21 @@ public partial class PdfViewer : UserControl
     public int PageCount => _loader.PageCount;
     public IReadOnlyList<FreeTextAnnotationModel> FreeTextAnnotations => _annotations;
     public int CurrentPageIndex => _currentPageIndex;
+    public bool IsAnnotationEditingEnabled
+    {
+        get => _isAnnotationEditingEnabled;
+        set
+        {
+            if (_isAnnotationEditingEnabled == value) return;
+            _isAnnotationEditingEnabled = value;
+            foreach (var control in _annotationControls.Values.ToList())
+                control.IsAnnotationEditingEnabled = value;
+        }
+    }
 
     public async void LoadDocument(string filePath)
     {
+        if (_disposed) return;
         if (!File.Exists(filePath)) { SetStatus("File not found."); return; }
         _loadCts?.Cancel();
         _loadCts = new CancellationTokenSource();
@@ -94,6 +108,7 @@ public partial class PdfViewer : UserControl
             _annotations.Clear();
             _annotations.AddRange(annotations);
             _currentPageIndex = 0;
+            ReleaseAllPageBitmaps();
             PagesPanel.Children.Clear();
             _pageSlots.Clear();
             _annotationControls.Clear();
@@ -148,9 +163,16 @@ public partial class PdfViewer : UserControl
         }, DispatcherPriority.Background);
     }
 
-    public void SaveAnnotations(string? dest = null)
+    public bool SaveAnnotations(string? dest, out string? error)
     {
-        if (string.IsNullOrEmpty(_currentPdfPath)) { SetStatus("Please open a PDF first."); return; }
+        error = null;
+        if (string.IsNullOrEmpty(_currentPdfPath))
+        {
+            error = "Please open a PDF first.";
+            SetStatus(error);
+            return false;
+        }
+
         var target = dest ?? _currentPdfPath;
         try
         {
@@ -159,15 +181,35 @@ public partial class PdfViewer : UserControl
                 .Concat(GetDomainAnnotationModels())
                 .ToList();
             PdfAnnotationService.SaveFreeTextAnnotations(_currentPdfPath, target, exportAnnotations);
+            if (!File.Exists(target) || new FileInfo(target).Length == 0)
+            {
+                error = $"Save failed: output file was not created: {target}";
+                SetStatus(error);
+                return false;
+            }
+
             SetStatus(!string.Equals(target, _currentPdfPath, StringComparison.OrdinalIgnoreCase)
                 ? $"Saved to: {target}" : "Annotations saved.");
+            return true;
         }
-        catch (Exception ex) { SetStatus($"Save failed: {ex.Message}"); }
+        catch (Exception ex)
+        {
+            error = $"Save failed: {ex.Message}";
+            SetStatus(error);
+            return false;
+        }
     }
 
-    public void SaveAnnotationsFlattened(string dest)
+    public bool SaveAnnotationsFlattened(string dest, out string? error)
     {
-        if (string.IsNullOrEmpty(_currentPdfPath)) { SetStatus("Please open a PDF first."); return; }
+        error = null;
+        if (string.IsNullOrEmpty(_currentPdfPath))
+        {
+            error = "Please open a PDF first.";
+            SetStatus(error);
+            return false;
+        }
+
         try
         {
             SyncAllAnnotationModelsFromUi();
@@ -175,9 +217,22 @@ public partial class PdfViewer : UserControl
                 .Concat(GetDomainAnnotationModels())
                 .ToList();
             PdfAnnotationService.SaveFreeTextAnnotationsFlattened(_currentPdfPath, dest, exportAnnotations);
+            if (!File.Exists(dest) || new FileInfo(dest).Length == 0)
+            {
+                error = $"Flatten save failed: output file was not created: {dest}";
+                SetStatus(error);
+                return false;
+            }
+
             SetStatus($"Flattened PDF saved to: {dest}");
+            return true;
         }
-        catch (Exception ex) { SetStatus($"Flatten save failed: {ex.Message}"); }
+        catch (Exception ex)
+        {
+            error = $"Flatten save failed: {ex.Message}";
+            SetStatus(error);
+            return false;
+        }
     }
 
     private void BuildDocumentLayout(bool fullRebuild = true)
@@ -185,6 +240,7 @@ public partial class PdfViewer : UserControl
         if (fullRebuild)
         {
             var gen = ++_renderGeneration;
+            ReleaseAllPageBitmaps();
             PagesPanel.Children.Clear();
             _pageSlots.Clear();
             _annotationControls.Clear();
@@ -212,23 +268,29 @@ public partial class PdfViewer : UserControl
             var ps = _loader.PageSizes[i];
             var php = _loader.GetPageHeightInPoints(i);
             slot.PageIndex = i;
-            if (slot.Host.Child is Panel pr)
+            slot.Host.Width = ps.Width + 2;
+            slot.Host.Height = ps.Height + 2;
+            if (slot.PageRoot is { } pageRoot)
             {
-                pr.Width = ps.Width; pr.Height = ps.Height;
-                foreach (var c in pr.Children)
-                {
-                    if (c is Image img) { img.Width = ps.Width; img.Height = ps.Height; }
-                    else if (c is PageAnnotationCanvas canvas)
-                    {
-                        canvas.Width = ps.Width; canvas.Height = ps.Height;
-                        RescaleAnnotationsOnLayer(canvas, i, php, scale);
-                    }
-                            else if (c is Canvas domainLayer)
-                    {
-                        domainLayer.Width = ps.Width; domainLayer.Height = ps.Height;
-                        RelayoutDomainAnnotations(_pageSlots[i], php, scale);
-                    }
-                }
+                pageRoot.Width = ps.Width;
+                pageRoot.Height = ps.Height;
+            }
+            if (slot.PageImage is { } pageImage)
+            {
+                pageImage.Width = ps.Width;
+                pageImage.Height = ps.Height;
+            }
+            if (slot.AnnotationLayer is { } annotationLayer)
+            {
+                annotationLayer.Width = ps.Width;
+                annotationLayer.Height = ps.Height;
+                RescaleAnnotationsOnLayer(annotationLayer, i, php, scale);
+            }
+            if (slot.DomainAnnotationLayer is { } domainLayer)
+            {
+                domainLayer.Width = ps.Width;
+                domainLayer.Height = ps.Height;
+                RelayoutDomainAnnotations(slot, php, scale);
             }
         }
         UpdatePageInfo();
@@ -251,7 +313,8 @@ public partial class PdfViewer : UserControl
         foreach (var sl in _pageSlots)
         {
             var php = _loader.GetPageHeightInPoints(sl.PageIndex);
-            RescaleAnnotationsOnLayer(sl.AnnotationLayer, sl.PageIndex, php, s);
+            if (sl.AnnotationLayer is { } annotationLayer)
+                RescaleAnnotationsOnLayer(annotationLayer, sl.PageIndex, php, s);
             RelayoutDomainAnnotations(sl, php, s);
         }
     }
@@ -260,14 +323,13 @@ public partial class PdfViewer : UserControl
     {
         var x = slot.DomainAnnotationHorizontalOffset / scale;
         var top = slot.DomainAnnotationVerticalOffset / scale;
-        foreach (var annotation in slot.DomainAnnotations)
+        for (var i = 0; i < slot.DomainAnnotationModels.Count; i++)
         {
-            if (annotation.Model is not { } model)
-                continue;
-
+            var model = slot.DomainAnnotationModels[i];
             model.PdfX = x;
             model.PdfY = pageHeightPoints - top - model.Height;
-            annotation.ApplyLayoutFromPdf(pageHeightPoints, scale);
+            if (i < slot.DomainAnnotations.Count)
+                slot.DomainAnnotations[i].ApplyLayoutFromPdf(pageHeightPoints, scale);
             x += model.Width + 4 / scale;
         }
     }
@@ -275,52 +337,124 @@ public partial class PdfViewer : UserControl
     private void AddPageSlot(int pi, double scale)
     {
         var ps = _loader.PageSizes[pi];
-        var php = _loader.GetPageHeightInPoints(pi);
-        var pr = new Panel { Width = ps.Width, Height = ps.Height, Margin = new Thickness(0), Background = Brushes.White, ClipToBounds = false };
-        var img = new Image { Width = ps.Width, Height = ps.Height };
-        pr.Children.Add(img);
-        var lo = new TextBlock { Text = "Loading...", HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center, Foreground = new SolidColorBrush(Color.Parse("#9CA3AF")), FontSize = 13, IsHitTestVisible = false };
-        pr.Children.Add(lo);
+        var host = new Border
+        {
+            Width = ps.Width + 2,
+            Height = ps.Height + 2,
+            HorizontalAlignment = HorizontalAlignment.Center,
+            Margin = new Thickness(0, 0, 0, 4),
+            Background = Brushes.White,
+            BorderBrush = new SolidColorBrush(Color.Parse("#D1D5DB")),
+            BorderThickness = new Thickness(1)
+        };
+        PagesPanel.Children.Add(host);
+        _pageSlots.Add(new PdfPageSlot { PageIndex = pi, Host = host });
+    }
+
+    private void MountPageContent(PdfPageSlot slot)
+    {
+        if (_disposed || slot.IsContentMounted) return;
+        var ps = _loader.PageSizes[slot.PageIndex];
+        var php = _loader.GetPageHeightInPoints(slot.PageIndex);
+        var scale = _loader.DisplayScale;
+        var pageRoot = new Panel { Width = ps.Width, Height = ps.Height, Background = Brushes.White, ClipToBounds = false };
+        var pageImage = new Image { Width = ps.Width, Height = ps.Height };
+        pageRoot.Children.Add(pageImage);
+        var loadingOverlay = new TextBlock
+        {
+            Text = "Loading...",
+            HorizontalAlignment = HorizontalAlignment.Center,
+            VerticalAlignment = VerticalAlignment.Center,
+            Foreground = new SolidColorBrush(Color.Parse("#9CA3AF")),
+            FontSize = 13,
+            IsHitTestVisible = false
+        };
+        pageRoot.Children.Add(loadingOverlay);
         var domainLayer = new Canvas
         {
             Width = ps.Width,
             Height = ps.Height,
             ClipToBounds = false,
-            IsHitTestVisible = false
+            IsHitTestVisible = false,
+            ZIndex = 3
         };
-        domainLayer.ZIndex = 3;
-        pr.Children.Add(domainLayer);
-        var layer = new PageAnnotationCanvas { Width = ps.Width, Height = ps.Height };
-        layer.ZIndex = 2;
-        layer.AnnotationDragCompleted += (_, args) =>
+        pageRoot.Children.Add(domainLayer);
+        var annotationLayer = new PageAnnotationCanvas { Width = ps.Width, Height = ps.Height, ZIndex = 2 };
+        annotationLayer.AnnotationDragCompleted += (_, args) =>
         {
             CommitAnnotationFromControl(args.Annotation);
             if (args.Annotation.Model is { } model)
                 AnnotationMoved?.Invoke(this, new AnnotationMovedEventArgs(model));
         };
-        layer.AnnotationResizeCompleted += (_, _) =>
+        annotationLayer.AnnotationResizeCompleted += (_, _) =>
         {
-            foreach (var c in layer.Children.OfType<FreeTextAnnotationControl>())
+            foreach (var control in annotationLayer.Children.OfType<FreeTextAnnotationControl>())
             {
-                CommitAnnotationFromControl(c);
-                if (c.Model is { } model)
+                CommitAnnotationFromControl(control);
+                if (control.Model is { } model)
                     AnnotationMoved?.Invoke(this, new AnnotationMovedEventArgs(model));
             }
         };
-        pr.Children.Add(layer);
-        var host = new Border { Child = pr, HorizontalAlignment = HorizontalAlignment.Center, Margin = new Thickness(0, 0, 0, 4), Background = Brushes.White, BorderBrush = new SolidColorBrush(Color.Parse("#D1D5DB")), BorderThickness = new Thickness(1) };
-        PagesPanel.Children.Add(host);
-        RebuildAnnotationsForPage(pi, php, scale, layer);
-        _pageSlots.Add(new PdfPageSlot
+        pageRoot.Children.Add(annotationLayer);
+
+        slot.PageRoot = pageRoot;
+        slot.PageImage = pageImage;
+        slot.LoadingOverlay = loadingOverlay;
+        slot.DomainAnnotationLayer = domainLayer;
+        slot.AnnotationLayer = annotationLayer;
+        slot.Host.Child = pageRoot;
+        RebuildAnnotationsForPage(slot.PageIndex, php, scale, annotationLayer);
+        RebuildDomainAnnotationControls(slot);
+    }
+
+    private void UnmountPageContent(PdfPageSlot slot)
+    {
+        if (!slot.IsContentMounted) return;
+        if (slot.AnnotationLayer is { } annotationLayer)
         {
-            PageIndex = pi,
-            Host = host,
-            PageImage = img,
-            LoadingOverlay = lo,
-            DomainAnnotationLayer = domainLayer,
-            DomainAnnotations = new List<FreeTextAnnotationControl>(),
-            AnnotationLayer = layer
-        });
+            foreach (var control in annotationLayer.Children.OfType<FreeTextAnnotationControl>().ToList())
+            {
+                CommitAnnotationFromControl(control);
+                annotationLayer.UnhookAnnotation(control);
+                if (control.Model is { } model &&
+                    _annotationControls.TryGetValue(model.Id, out var tracked) &&
+                    ReferenceEquals(tracked, control))
+                    _annotationControls.Remove(model.Id);
+            }
+        }
+        if (_selectedAnnotation?.Model?.PageIndex == slot.PageIndex)
+            _selectedAnnotation = null;
+        ReleasePageBitmap(slot);
+        slot.Host.Child = null;
+        slot.PageRoot = null;
+        slot.PageImage = null;
+        slot.LoadingOverlay = null;
+        slot.DomainAnnotationLayer = null;
+        slot.DomainAnnotations.Clear();
+        slot.AnnotationLayer = null;
+    }
+
+    private void RebuildDomainAnnotationControls(PdfPageSlot slot)
+    {
+        if (slot.DomainAnnotationLayer is not { } layer) return;
+        layer.Children.Clear();
+        slot.DomainAnnotations.Clear();
+        var pageHeightPoints = _loader.GetPageHeightInPoints(slot.PageIndex);
+        var scale = _loader.DisplayScale;
+        foreach (var model in slot.DomainAnnotationModels)
+        {
+            var annotation = new FreeTextAnnotationControl
+            {
+                Model = model,
+                IsVisible = true,
+                IsHitTestVisible = false,
+                Focusable = false,
+                ZIndex = 3
+            };
+            annotation.ApplyLayoutFromPdf(pageHeightPoints, scale);
+            layer.Children.Add(annotation);
+            slot.DomainAnnotations.Add(annotation);
+        }
     }
 
     private void RequestVirtualization() { if (_pageSlots.Count == 0 || _virtualizeScrollTimer == null) return; _virtualizeScrollTimer.Stop(); _virtualizeScrollTimer.Start(); }
@@ -333,7 +467,45 @@ public partial class PdfViewer : UserControl
     {
         if (_pageSlots.Count == 0) return;
         var keep = new HashSet<int>(GetVisiblePageRange(ViewportPageBuffer));
-        foreach (var s in _pageSlots) { if (!keep.Contains(s.PageIndex) && s.PageImage.Source != null) { s.PageImage.Source = null; s.IsBitmapLoaded = false; s.IsRendering = false; s.LoadingOverlay.IsVisible = false; } }
+        if (_selectedAnnotation?.Model?.PageIndex is { } selectedPageIndex)
+            keep.Add(selectedPageIndex);
+        foreach (var s in _pageSlots)
+        {
+            if (!keep.Contains(s.PageIndex))
+                UnmountPageContent(s);
+        }
+    }
+
+    private void ReleaseAllPageBitmaps()
+    {
+        foreach (var slot in _pageSlots)
+            ReleasePageBitmap(slot);
+    }
+
+    private static void ReleasePageBitmap(PdfPageSlot slot)
+    {
+        var bitmap = slot.PageImage?.Source as IDisposable;
+        if (slot.PageImage is { } pageImage)
+            pageImage.Source = null;
+        slot.IsBitmapLoaded = false;
+        if (slot.LoadingOverlay is { } loadingOverlay)
+            loadingOverlay.IsVisible = false;
+        bitmap?.Dispose();
+    }
+
+    private static void AttachPageBitmap(PdfPageSlot slot, WriteableBitmap bitmap)
+    {
+        if (slot.PageImage is not { } pageImage)
+        {
+            bitmap.Dispose();
+            return;
+        }
+        var previousBitmap = pageImage.Source as IDisposable;
+        pageImage.Source = bitmap;
+        slot.IsBitmapLoaded = true;
+        if (slot.LoadingOverlay is { } loadingOverlay)
+            loadingOverlay.IsVisible = false;
+        previousBitmap?.Dispose();
     }
 
     private async Task VirtualizeVisiblePagesAsync()
@@ -341,6 +513,8 @@ public partial class PdfViewer : UserControl
         if (_pageSlots.Count == 0) return;
         var gen = _renderGeneration;
         var vis = GetVisiblePageRange(ViewportPageBuffer);
+        foreach (var pageIndex in vis)
+            MountPageContent(_pageSlots[pageIndex]);
         var ordered = vis.OrderBy(i => Math.Abs(i - _currentPageIndex)).ThenBy(i => i).ToList();
         if (ordered.Count == 0) return;
         await TryRenderPageAsync(ordered[0], gen);
@@ -349,21 +523,39 @@ public partial class PdfViewer : UserControl
 
     private async Task TryRenderPageAsync(int pi, int gen)
     {
-        if (gen != _renderGeneration || pi < 0 || pi >= _pageSlots.Count) return;
+        if (_disposed || gen != _renderGeneration || pi < 0 || pi >= _pageSlots.Count) return;
         var s = _pageSlots[pi];
-        if (s.PageImage.Source != null && s.IsBitmapLoaded) return;
+        MountPageContent(s);
+        if (s.PageImage?.Source != null && s.IsBitmapLoaded) return;
         lock (_slotLoadGate) { if (s.IsRendering) return; s.IsRendering = true; }
-        if (s.PageImage.Source == null) s.LoadingOverlay.IsVisible = true;
+        if (s.PageImage?.Source == null && s.LoadingOverlay is { } loadingOverlay)
+            loadingOverlay.IsVisible = true;
+        WriteableBitmap? bitmap = null;
+        var renderPermitAcquired = false;
         try
         {
             await _pageRenderSemaphore.WaitAsync();
-            WriteableBitmap? bmp;
-            try { bmp = await Task.Run(() => _loader.RenderPage(pi)); } finally { _pageRenderSemaphore.Release(); }
-            if (gen != _renderGeneration) return;
-            if (!GetVisiblePageRange(ViewportPageBuffer).Contains(pi)) { s.LoadingOverlay.IsVisible = false; return; }
-            s.PageImage.Source = bmp; s.IsBitmapLoaded = true; s.LoadingOverlay.IsVisible = false;
+            renderPermitAcquired = true;
+            if (_disposed || gen != _renderGeneration || !GetVisiblePageRange(ViewportPageBuffer).Contains(pi))
+                return;
+            bitmap = await Task.Run(() => _loader.RenderPage(pi));
+            if (_disposed || gen != _renderGeneration) return;
+            if (!GetVisiblePageRange(ViewportPageBuffer).Contains(pi))
+            {
+                if (s.LoadingOverlay is { } staleLoadingOverlay)
+                    staleLoadingOverlay.IsVisible = false;
+                return;
+            }
+            AttachPageBitmap(s, bitmap);
+            bitmap = null;
         }
-        finally { s.IsRendering = false; }
+        finally
+        {
+            bitmap?.Dispose();
+            if (renderPermitAcquired)
+                _pageRenderSemaphore.Release();
+            s.IsRendering = false;
+        }
     }
 
     private IReadOnlyList<int> GetVisiblePageRange(int buf)
@@ -382,7 +574,11 @@ public partial class PdfViewer : UserControl
     private void RebuildAnnotationsForPage(int pi, double php, double scale, Canvas layer) { layer.Children.Clear(); foreach (var m in _annotations.Where(a => a.PageIndex == pi)) AddAnnotationControl(m, php, scale, layer); }
     private void AddAnnotationControl(FreeTextAnnotationModel m, double php, double scale, Canvas layer)
     {
-        var c = new FreeTextAnnotationControl { Model = m };
+        var c = new FreeTextAnnotationControl
+        {
+            Model = m,
+            IsAnnotationEditingEnabled = IsAnnotationEditingEnabled
+        };
         c.ApplyLayoutFromPdf(php, scale);
         c.CommitEdit += (_, _) =>
         {
@@ -413,8 +609,8 @@ public partial class PdfViewer : UserControl
         c.ApplyLayoutFromPdf(php, scale);
     }
 
-    private void SyncAllAnnotationModelsFromUi() { foreach (var s in _pageSlots) foreach (var c in s.AnnotationLayer.Children.OfType<FreeTextAnnotationControl>()) CommitAnnotationFromControl(c); }
-    private void RemoveAnnotation(string id) { _annotations.RemoveAll(a => a.Id == id); if (_annotationControls.Remove(id, out var c)) { var l = _pageSlots.Select(s => s.AnnotationLayer).FirstOrDefault(x => x.Children.Contains(c)); l?.Children.Remove(c); } if (_selectedAnnotation?.Model?.Id == id) _selectedAnnotation = null; }
+    private void SyncAllAnnotationModelsFromUi() { foreach (var s in _pageSlots) if (s.AnnotationLayer is { } layer) foreach (var c in layer.Children.OfType<FreeTextAnnotationControl>()) CommitAnnotationFromControl(c); }
+    private void RemoveAnnotation(string id) { _annotations.RemoveAll(a => a.Id == id); if (_annotationControls.Remove(id, out var c)) { var l = _pageSlots.Select(s => s.AnnotationLayer).OfType<PageAnnotationCanvas>().FirstOrDefault(x => x.Children.Contains(c)); l?.UnhookAnnotation(c); l?.Children.Remove(c); } if (_selectedAnnotation?.Model?.Id == id) _selectedAnnotation = null; }
     private void OnAnnotationIsSelectedChanged(FreeTextAnnotationControl c)
     {
         if (c.IsSelected)
@@ -471,4 +667,28 @@ public partial class PdfViewer : UserControl
     private void PrevPage_OnClick(object? s, RoutedEventArgs e) { if (_loader.PageCount == 0) return; _currentPageIndex = Math.Max(0, _currentPageIndex - 1); ScrollToPage(_currentPageIndex); UpdatePageInfo(); }
     private void NextPage_OnClick(object? s, RoutedEventArgs e) { if (_loader.PageCount == 0) return; _currentPageIndex = Math.Min(_loader.PageCount - 1, _currentPageIndex + 1); ScrollToPage(_currentPageIndex); UpdatePageInfo(); }
     private void SetStatus(string msg) => StatusText.Text = msg;
+
+    public void Dispose()
+    {
+        if (_disposed) return;
+        _disposed = true;
+        ++_renderGeneration;
+        ++_layoutGeneration;
+        _loadCts?.Cancel();
+        _loadCts?.Dispose();
+        _loadCts = null;
+        _unloadCts?.Cancel();
+        _unloadCts?.Dispose();
+        _unloadCts = null;
+        _virtualizeScrollTimer?.Stop();
+        _virtualizeScrollTimer = null;
+        foreach (var slot in _pageSlots)
+            UnmountPageContent(slot);
+        PagesPanel.Children.Clear();
+        _pageSlots.Clear();
+        _annotationControls.Clear();
+        _selectedAnnotation = null;
+        _loader.Dispose();
+        GC.SuppressFinalize(this);
+    }
 }

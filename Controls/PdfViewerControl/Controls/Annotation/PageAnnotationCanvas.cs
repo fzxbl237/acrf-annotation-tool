@@ -20,12 +20,16 @@ public sealed class PageAnnotationCanvas : Canvas
     {
         Background = Brushes.Transparent;
         ClipToBounds = false;
-        DetachedFromVisualTree += (_, _) => AnnotationAdornerService.CleanupAll();
+        DetachedFromVisualTree += (_, _) => AnnotationAdornerService.CleanupCanvas(this);
     }
     public event EventHandler<AnnotationDragCompletedEventArgs>? AnnotationDragCompleted;
     public event EventHandler? AnnotationResizeCompleted;
     public void HookAnnotation(FreeTextAnnotationControl ann) => ann.PointerPressed += OnAnnotationPointerPressed;
-    public void UnhookAnnotation(FreeTextAnnotationControl ann) => ann.PointerPressed -= OnAnnotationPointerPressed;
+    public void UnhookAnnotation(FreeTextAnnotationControl ann)
+    {
+        ann.PointerPressed -= OnAnnotationPointerPressed;
+        AnnotationAdornerService.Cleanup(ann);
+    }
     private void OnAnnotationPointerPressed(object? sender, PointerPressedEventArgs e)
     {
         if (sender is not FreeTextAnnotationControl ann || ann.IsInEditMode) return;

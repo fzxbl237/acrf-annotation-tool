@@ -17,6 +17,7 @@ public partial class FreeTextAnnotationControl : UserControl
     public const double DefaultDashPoints = 3;
     public static readonly StyledProperty<FreeTextAnnotationModel?> ModelProperty = AvaloniaProperty.Register<FreeTextAnnotationControl, FreeTextAnnotationModel?>(nameof(Model));
     public static readonly StyledProperty<bool> IsSelectedProperty = AvaloniaProperty.Register<FreeTextAnnotationControl, bool>(nameof(IsSelected));
+    public static readonly StyledProperty<bool> IsAnnotationEditingEnabledProperty = AvaloniaProperty.Register<FreeTextAnnotationControl, bool>(nameof(IsAnnotationEditingEnabled), false);
     public event EventHandler? CommitEdit;
     public event EventHandler? DeleteRequested;
     private double _displayScale = 96.0 / 72.0;
@@ -24,6 +25,8 @@ public partial class FreeTextAnnotationControl : UserControl
     public FreeTextAnnotationControl()
     {
         InitializeComponent(); ClipToBounds = false;
+        Editor.IsReadOnly = !IsAnnotationEditingEnabled;
+        if (ContextMenu is { } contextMenu) contextMenu.IsEnabled = IsAnnotationEditingEnabled;
         Editor.TextChanged += (_, _) => UpdatePlaceholder();
         Editor.GotFocus += (_, _) => { DragOverlay.IsVisible = false; Placeholder.IsVisible = false; if (IsPlaceholderContent(Editor.Text)) Editor.Text = string.Empty; };
         Editor.LostFocus += (_, _) => EndEdit();
@@ -31,7 +34,7 @@ public partial class FreeTextAnnotationControl : UserControl
         DragOverlay.PointerPressed += (_, e) => { if (Model == null) return; IsSelected = true; if (e.ClickCount >= 2) { BeginEdit(); e.Handled = true; } };
         PointerPressed += (_, e) => { if (Model == null || e.Handled) return; IsSelected = true; if (e.ClickCount >= 2) { BeginEdit(); e.Handled = true; } };
         Loaded += (_, _) => ApplyModelToUi();
-        DetachedFromVisualTree += (_, _) => AnnotationAdornerService.SetSelected(this, false);
+        DetachedFromVisualTree += (_, _) => AnnotationAdornerService.Cleanup(this);
         PropertyChanged += (_, e) =>
         {
             if (e.Property == ModelProperty) ApplyModelToUi();
@@ -41,11 +44,19 @@ public partial class FreeTextAnnotationControl : UserControl
                 UpdateChrome();
                 AnnotationAdornerService.SetSelected(this, IsSelected);
             }
+            else if (e.Property == IsAnnotationEditingEnabledProperty)
+            {
+                if (!IsAnnotationEditingEnabled && Editor.IsFocused) EndEdit();
+                Editor.IsReadOnly = !IsAnnotationEditingEnabled;
+                if (ContextMenu is { } contextMenu) contextMenu.IsEnabled = IsAnnotationEditingEnabled;
+                AnnotationAdornerService.UpdateAdornerState(this);
+            }
         };
     }
     public bool IsInEditMode => Editor.IsFocused;
     public FreeTextAnnotationModel? Model { get => GetValue(ModelProperty); set => SetValue(ModelProperty, value); }
     public bool IsSelected { get => GetValue(IsSelectedProperty); set => SetValue(IsSelectedProperty, value); }
+    public bool IsAnnotationEditingEnabled { get => GetValue(IsAnnotationEditingEnabledProperty); set => SetValue(IsAnnotationEditingEnabledProperty, value); }
     public static bool IsPlaceholderContent(string? text) => string.IsNullOrWhiteSpace(text) || string.Equals(text?.Trim(), DefaultPlaceholderText, StringComparison.OrdinalIgnoreCase);
     public void NotifyResizeCommitted() => CommitEdit?.Invoke(this, EventArgs.Empty);
     public void ApplyLayoutFromPdf(double pageHeightPoints, double displayScale)
@@ -59,14 +70,23 @@ public partial class FreeTextAnnotationControl : UserControl
         Canvas.SetLeft(this, left); Canvas.SetTop(this, top);
         MinWidth = Math.Max(2, Math.Min(w, 12 * displayScale)); MinHeight = Math.Max(2, Math.Min(h, 8 * displayScale));
         Width = w; Height = h;
-        Chrome.Padding = new Thickness(Math.Max(1, 1 * displayScale), Math.Max(1, 2 * displayScale));
+        var isArialUnicodeMs = Model.FontFamily.Equals("Arial Unicode MS", StringComparison.OrdinalIgnoreCase);
+        var horizontalPadding = Math.Max(1, 3 * displayScale);
+        var verticalPadding = Math.Max(0.5, (isArialUnicodeMs ? 0.5 : 2) * displayScale);
+        var baselineCompensation = isArialUnicodeMs ? 0.5 * displayScale : 0;
+        Chrome.Padding = new Thickness(
+            horizontalPadding,
+            Math.Max(0, verticalPadding - baselineCompensation),
+            horizontalPadding,
+            verticalPadding + baselineCompensation);
         Editor.FontSize = Math.Max(1, Model.FontSize * displayScale); Placeholder.FontSize = Editor.FontSize;
         ApplyTextAlignmentFromModel(); ApplyModelToUi(); UpdateChrome();
     }
     public void BeginEdit()
     {
+        if (!IsAnnotationEditingEnabled) return;
         IsSelected = true; UpdateChrome();
-        Dispatcher.Post(() => { Placeholder.IsVisible = false; if (IsPlaceholderContent(Editor.Text) || string.IsNullOrEmpty(Editor.Text)) Editor.Text = string.Empty; DragOverlay.IsVisible = false; Editor.Focus(); Editor.SelectAll(); UpdatePlaceholder(); });
+        Dispatcher.Post(() => { if (!IsAnnotationEditingEnabled) { UpdateDragOverlay(); return; } Placeholder.IsVisible = false; if (IsPlaceholderContent(Editor.Text) || string.IsNullOrEmpty(Editor.Text)) Editor.Text = string.Empty; DragOverlay.IsVisible = false; Editor.Focus(); Editor.SelectAll(); UpdatePlaceholder(); });
     }
     public void EndEdit()
     {
@@ -104,7 +124,8 @@ public partial class FreeTextAnnotationControl : UserControl
         }
         if (e.Key == Key.Delete && e.KeyModifiers.HasFlag(KeyModifiers.Control))
         {
-            DeleteRequested?.Invoke(this, EventArgs.Empty);
+            if (IsAnnotationEditingEnabled)
+                DeleteRequested?.Invoke(this, EventArgs.Empty);
             e.Handled = true;
         }
     }
@@ -112,8 +133,28 @@ public partial class FreeTextAnnotationControl : UserControl
     {
         if (Model == null) return;
         try { Editor.Foreground = new SolidColorBrush(Color.Parse(Model.FontColorHex)); } catch { Editor.Foreground = Brushes.Black; }
-        try { var fn = string.IsNullOrWhiteSpace(Model.FontFamily) ? "Arial" : Model.FontFamily; Editor.FontFamily = new FontFamily(fn + ",SimSun,Arial"); } catch { Editor.FontFamily = new FontFamily("Arial,SimSun"); }
-        Editor.FontWeight = Model.IsBold ? FontWeight.Bold : FontWeight.Normal;
+        var isDomainAnnotation = Model.Id.StartsWith("__domain_", StringComparison.Ordinal);
+        var fn = string.IsNullOrWhiteSpace(Model.FontFamily) ? "Arial" : Model.FontFamily;
+        var isArialUnicodeMs = fn.Equals("Arial Unicode MS", StringComparison.OrdinalIgnoreCase);
+        var effectiveIsBold = !isArialUnicodeMs && (Model.IsBold || isDomainAnnotation);
+        try
+        {
+            if (isArialUnicodeMs)
+            {
+                Editor.FontFamily = new FontFamily(new Uri("fonts:AcrfProjectFonts", UriKind.Absolute), "Arial Unicode MS");
+            }
+            else
+            {
+                Editor.FontFamily = new FontFamily(fn + ",SimSun,Arial");
+            }
+        }
+        catch
+        {
+            Editor.FontFamily = new FontFamily("Arial,SimSun");
+        }
+        Editor.FontWeight = effectiveIsBold ? FontWeight.Bold : FontWeight.Normal;
+        BoldMenuItem.IsEnabled = IsAnnotationEditingEnabled && isDomainAnnotation && !isArialUnicodeMs;
+        BoldMenuItem.IsChecked = effectiveIsBold;
         Editor.Text = IsPlaceholderContent(Model.Text) ? string.Empty : Model.Text;
         ApplyTextAlignmentFromModel(); UpdateChrome(); UpdatePlaceholder(); UpdateDragOverlay();
     }
@@ -148,23 +189,34 @@ public partial class FreeTextAnnotationControl : UserControl
     private void UpdateDragOverlay() => DragOverlay.IsVisible = !Editor.IsFocused;
     public void SyncToModel() { if (Model != null) Model.Text = IsPlaceholderContent(Editor.Text) ? DefaultPlaceholderText : Editor.Text; }
     private void ContextMenu_OnOpened(object? s, EventArgs e) { if (Model != null) IsSelected = true; BorderSolidMenuItem.IsChecked = Model?.BorderStyle != AnnotationBorderStyle.Dashed; BorderDashedMenuItem.IsChecked = Model?.BorderStyle == AnnotationBorderStyle.Dashed; if (Model != null) { AlignHLeftMenuItem.IsChecked = Model.HorizontalTextAlignment == AnnotationHorizontalTextAlignment.Left; AlignHCenterMenuItem.IsChecked = Model.HorizontalTextAlignment == AnnotationHorizontalTextAlignment.Center; AlignHRightMenuItem.IsChecked = Model.HorizontalTextAlignment == AnnotationHorizontalTextAlignment.Right; AlignVTopMenuItem.IsChecked = Model.VerticalTextAlignment == AnnotationVerticalTextAlignment.Top; AlignVCenterMenuItem.IsChecked = Model.VerticalTextAlignment == AnnotationVerticalTextAlignment.Center; AlignVBottomMenuItem.IsChecked = Model.VerticalTextAlignment == AnnotationVerticalTextAlignment.Bottom; } }
-    private void HAlign(AnnotationHorizontalTextAlignment v) { if (Model == null) return; Model.HorizontalTextAlignment = v; ApplyTextAlignmentFromModel(); CommitEdit?.Invoke(this, EventArgs.Empty); }
-    private void VAlign(AnnotationVerticalTextAlignment v) { if (Model == null) return; Model.VerticalTextAlignment = v; ApplyTextAlignmentFromModel(); CommitEdit?.Invoke(this, EventArgs.Empty); }
+    private void HAlign(AnnotationHorizontalTextAlignment v) { if (!IsAnnotationEditingEnabled || Model == null) return; Model.HorizontalTextAlignment = v; ApplyTextAlignmentFromModel(); CommitEdit?.Invoke(this, EventArgs.Empty); }
+    private void VAlign(AnnotationVerticalTextAlignment v) { if (!IsAnnotationEditingEnabled || Model == null) return; Model.VerticalTextAlignment = v; ApplyTextAlignmentFromModel(); CommitEdit?.Invoke(this, EventArgs.Empty); }
     private void AlignHLeftMenuItem_OnClick(object? s, Avalonia.Interactivity.RoutedEventArgs e) => HAlign(AnnotationHorizontalTextAlignment.Left);
     private void AlignHCenterMenuItem_OnClick(object? s, Avalonia.Interactivity.RoutedEventArgs e) => HAlign(AnnotationHorizontalTextAlignment.Center);
     private void AlignHRightMenuItem_OnClick(object? s, Avalonia.Interactivity.RoutedEventArgs e) => HAlign(AnnotationHorizontalTextAlignment.Right);
     private void AlignVTopMenuItem_OnClick(object? s, Avalonia.Interactivity.RoutedEventArgs e) => VAlign(AnnotationVerticalTextAlignment.Top);
     private void AlignVCenterMenuItem_OnClick(object? s, Avalonia.Interactivity.RoutedEventArgs e) => VAlign(AnnotationVerticalTextAlignment.Center);
     private void AlignVBottomMenuItem_OnClick(object? s, Avalonia.Interactivity.RoutedEventArgs e) => VAlign(AnnotationVerticalTextAlignment.Bottom);
-    private void BorderSolidMenuItem_OnClick(object? s, Avalonia.Interactivity.RoutedEventArgs e) { if (Model != null) { Model.BorderStyle = AnnotationBorderStyle.Solid; UpdateChrome(); CommitEdit?.Invoke(this, EventArgs.Empty); } }
-    private void BorderDashedMenuItem_OnClick(object? s, Avalonia.Interactivity.RoutedEventArgs e) { if (Model != null) { Model.BorderStyle = AnnotationBorderStyle.Dashed; UpdateChrome(); CommitEdit?.Invoke(this, EventArgs.Empty); } }
-    private void SetBg(string hex) { if (Model != null) { Model.BackgroundColorHex = hex; UpdateChrome(); CommitEdit?.Invoke(this, EventArgs.Empty); } }
+    private void BorderSolidMenuItem_OnClick(object? s, Avalonia.Interactivity.RoutedEventArgs e) { if (IsAnnotationEditingEnabled && Model != null) { Model.BorderStyle = AnnotationBorderStyle.Solid; UpdateChrome(); CommitEdit?.Invoke(this, EventArgs.Empty); } }
+    private void BorderDashedMenuItem_OnClick(object? s, Avalonia.Interactivity.RoutedEventArgs e) { if (IsAnnotationEditingEnabled && Model != null) { Model.BorderStyle = AnnotationBorderStyle.Dashed; UpdateChrome(); CommitEdit?.Invoke(this, EventArgs.Empty); } }
+    private void SetBg(string hex) { if (IsAnnotationEditingEnabled && Model != null) { Model.BackgroundColorHex = hex; UpdateChrome(); CommitEdit?.Invoke(this, EventArgs.Empty); } }
     private void BgYellowMenuItem_OnClick(object? s, Avalonia.Interactivity.RoutedEventArgs e) => SetBg("#FFFFF59D");
     private void BgGreenMenuItem_OnClick(object? s, Avalonia.Interactivity.RoutedEventArgs e) => SetBg("#FFA5D6A7");
     private void BgRedMenuItem_OnClick(object? s, Avalonia.Interactivity.RoutedEventArgs e) => SetBg("#FFEF9A9A");
     private void BgBlueMenuItem_OnClick(object? s, Avalonia.Interactivity.RoutedEventArgs e) => SetBg("#FF90CAF9");
     private void BgWhiteMenuItem_OnClick(object? s, Avalonia.Interactivity.RoutedEventArgs e) => SetBg("#FFFFFFFF");
-    private void FontSizeMenuItem_OnClick(object? s, Avalonia.Interactivity.RoutedEventArgs e) { if (Model != null && s is MenuItem mi && mi.Tag is string t && double.TryParse(t, out var fs)) { Model.FontSize = fs; ApplyModelToUi(); CommitEdit?.Invoke(this, EventArgs.Empty); } }
-    private void BoldMenuItem_OnClick(object? s, Avalonia.Interactivity.RoutedEventArgs e) { if (Model != null) { Model.IsBold = !Model.IsBold; BoldMenuItem.IsChecked = Model.IsBold; ApplyModelToUi(); CommitEdit?.Invoke(this, EventArgs.Empty); } }
-    private void DeleteMenuItem_OnClick(object? s, Avalonia.Interactivity.RoutedEventArgs e) => DeleteRequested?.Invoke(this, EventArgs.Empty);
+    private void FontSizeMenuItem_OnClick(object? s, Avalonia.Interactivity.RoutedEventArgs e) { if (IsAnnotationEditingEnabled && Model != null && s is MenuItem mi && mi.Tag is string t && double.TryParse(t, out var fs)) { Model.FontSize = fs; ApplyModelToUi(); CommitEdit?.Invoke(this, EventArgs.Empty); } }
+    private void BoldMenuItem_OnClick(object? s, Avalonia.Interactivity.RoutedEventArgs e)
+    {
+        if (!IsAnnotationEditingEnabled || Model == null ||
+            !Model.Id.StartsWith("__domain_", StringComparison.Ordinal) ||
+            Model.FontFamily.Equals("Arial Unicode MS", StringComparison.OrdinalIgnoreCase))
+            return;
+
+        Model.IsBold = true;
+        BoldMenuItem.IsChecked = true;
+        ApplyModelToUi();
+        CommitEdit?.Invoke(this, EventArgs.Empty);
+    }
+    private void DeleteMenuItem_OnClick(object? s, Avalonia.Interactivity.RoutedEventArgs e) { if (IsAnnotationEditingEnabled) DeleteRequested?.Invoke(this, EventArgs.Empty); }
 }

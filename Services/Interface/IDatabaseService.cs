@@ -18,6 +18,8 @@ public sealed class TemplateDatasetRecord
     public string? Name { get; set; }
 
     public string? Label { get; set; }
+
+    public string? Language { get; set; }
 }
 
 public sealed class TemplateVariableRecord

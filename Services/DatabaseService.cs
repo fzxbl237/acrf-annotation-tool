@@ -14,7 +14,7 @@ public sealed class DatabaseService(ISqlSugarClient sqlSugar) : IDatabaseService
     public IReadOnlyList<TemplateDatasetRecord> QueryTemplateDatasets()
     {
         return sqlSugar.Ado.SqlQuery<TemplateDatasetRecord>(
-            "SELECT Name, Label FROM template_dataset WHERE Name IS NOT NULL");
+            "SELECT Name, Label, Language FROM template_dataset WHERE Name IS NOT NULL");
     }
 
     public IReadOnlyList<TemplateVariableRecord> QueryTemplateVariables()
@@ -26,19 +26,40 @@ public sealed class DatabaseService(ISqlSugarClient sqlSugar) : IDatabaseService
 
     public IReadOnlyList<Suggestion> QuerySuggestions(string? searchText)
     {
-        var query = sqlSugar.Queryable<Suggestion>();
         var keyword = searchText?.Trim();
-        if (!string.IsNullOrWhiteSpace(keyword))
+        if (string.IsNullOrWhiteSpace(keyword))
         {
-            query = query.Where(item =>
-                item.Content.Contains(keyword) ||
-                (item.Description != null && item.Description.Contains(keyword)));
+            return sqlSugar.Queryable<Suggestion>()
+                .OrderBy(item => item.Content)
+                .Take(50)
+                .ToList();
         }
 
-        return query
+        var prefixMatches = sqlSugar.Queryable<Suggestion>()
+            .Where(item => item.Content.StartsWith(keyword))
             .OrderBy(item => item.Content)
             .Take(50)
             .ToList();
+        if (prefixMatches.Count >= 50)
+            return prefixMatches;
+
+        var remainingQuery = sqlSugar.Queryable<Suggestion>()
+            .Where(item =>
+                item.Content.Contains(keyword) ||
+                (item.Description != null && item.Description.Contains(keyword)));
+        if (prefixMatches.Count > 0)
+        {
+            var prefixIds = prefixMatches.Select(item => item.Id).ToList();
+            remainingQuery = remainingQuery.Where(item => !prefixIds.Contains(item.Id));
+        }
+
+        var remaining = remainingQuery
+            .OrderBy(item => item.Content)
+            .Take(50 - prefixMatches.Count)
+            .ToList();
+
+        prefixMatches.AddRange(remaining);
+        return prefixMatches;
     }
 
     public void InitializeSuggestions()

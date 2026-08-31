@@ -196,6 +196,26 @@
                         Width="100"
                         x:Name="DomainAnnotationVerticalOffsetInput" />
                 </Grid>
+                <StackPanel Orientation="Horizontal" Spacing="8">
+                    <TextBlock Text="语言：" VerticalAlignment="Center" />
+                    <atom:ToggleSwitch
+                        IsChecked="{Binding Language, Mode=OneWay}"
+                        OffContent="en"
+                        OnContent="zh"
+                        VerticalAlignment="Center"
+                        x:Name="LanguageToggleSwitch" />
+                </StackPanel>
+                <StackPanel Spacing="4">
+                    <atom:CheckBox
+                        Content="允许编辑 PDF 注释（文本、大小和样式）"
+                        IsChecked="False"
+                        x:Name="PdfAnnotationEditingCheckBox" />
+                    <TextBlock
+                        FontSize="12"
+                        Foreground="#FF64748B"
+                        Margin="24,0,0,0"
+                        Text="关闭后仍可选择和拖动注释位置。" />
+                </StackPanel>
                 <TextBlock
                     Foreground="#FFB91C1C"
                     IsVisible="False"

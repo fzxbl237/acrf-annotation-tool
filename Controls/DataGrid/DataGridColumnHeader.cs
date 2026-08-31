@@ -159,6 +159,8 @@ public class DataGridColumnHeader : Control
             _root.Background = background;
     }
 
+    internal void RefreshFilterIcon() => SyncFilterIcon();
+
     /// <summary>
     /// Central icon state update. Rules:
     ///   filtered → funnel + dot, blue fill, always visible
@@ -294,11 +296,7 @@ public class DataGridColumnHeader : Control
             Header = "取消所有筛选",
             IsEnabled = hasFilter,
         };
-        clearAllItem.Click += (_, _) =>
-        {
-            foreach (var col in grid.Columns.ToList())
-                col.ClearFilter();
-        };
+        clearAllItem.Click += (_, _) => grid.ClearAllFilters();
         menu.Items.Add(clearAllItem);
 
         // Anchor to the stable headers presenter (not this header) so the menu stays open
@@ -405,6 +403,7 @@ public class DataGridColumnHeader : Control
     {
         if (OwningColumn == null || OwningColumn.DataGridOwner == null) return;
         var grid = OwningColumn.DataGridOwner;
+        grid.EndEditBeforeLayoutChange();
 
         var contextItems = grid.GetFilterContextItems(OwningColumn).ToList();
         var uniqueValues = contextItems

@@ -38,7 +38,7 @@ public partial class App : Application
             services.AddSingleton<ISqlSugarClient>(_ =>
             {
                 var databasePath = Path.Combine(AppContext.BaseDirectory, "cdisc_setting.db");
-                return new SqlSugarClient(new ConnectionConfig
+                return new SqlSugarScope(new ConnectionConfig
                 {
                     ConfigId = "setting",
                     DbType = DbType.Sqlite,
@@ -54,7 +54,7 @@ public partial class App : Application
             services.AddSingleton<MainWindowViewModel>();
 
             _serviceProvider = services.BuildServiceProvider();
-            _serviceProvider.GetRequiredService<IDatabaseService>().InitializeSuggestions();
+            //_serviceProvider.GetRequiredService<IDatabaseService>().InitializeSuggestions();
             desktop.MainWindow = new MainWindow
             {
                 DataContext = _serviceProvider.GetRequiredService<MainWindowViewModel>()

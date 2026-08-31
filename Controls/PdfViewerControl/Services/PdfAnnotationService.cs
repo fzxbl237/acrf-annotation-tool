@@ -16,6 +16,11 @@ namespace PdfViewerControl.Services;
 
 public static class PdfAnnotationService
 {
+    static PdfAnnotationService()
+    {
+        GlobalFontSettings.FontResolver = new ProjectFontResolver();
+    }
+
     private static readonly Regex DaRegex = new(
         @"/(?<font>[\w+-]+)\s+(?<size>[\d.]+)\s+Tf\s+(?<r>[\d.]+)\s+(?<g>[\d.]+)\s+(?<b>[\d.]+)\s+rg",
         RegexOptions.Compiled);
@@ -54,8 +59,11 @@ public static class PdfAnnotationService
                     {
                         if (double.TryParse(match.Groups["size"].Value, NumberStyles.Float, CultureInfo.InvariantCulture, out var sz))
                             m.FontSize = sz;
-                        m.FontFamily = "Arial";
-                        m.IsBold = IsBoldFontResource(annotation, "/" + match.Groups["font"].Value);
+                        var fontResourceName = match.Groups["font"].Value;
+                        m.FontFamily = ResolveLoadedFontFamily(fontResourceName);
+                        m.IsBold = m.FontFamily.Equals("Arial Unicode MS", StringComparison.OrdinalIgnoreCase)
+                            ? false
+                            : IsBoldFontResource(annotation, fontResourceName);
                         if (double.TryParse(match.Groups["r"].Value, NumberStyles.Float, CultureInfo.InvariantCulture, out var cr) &&
                             double.TryParse(match.Groups["g"].Value, NumberStyles.Float, CultureInfo.InvariantCulture, out var cg) &&
                             double.TryParse(match.Groups["b"].Value, NumberStyles.Float, CultureInfo.InvariantCulture, out var cb))
@@ -97,7 +105,7 @@ public static class PdfAnnotationService
                     new XPoint(m.PdfX, m.PdfY),
                     new XPoint(m.PdfX + m.Width, m.PdfY + m.Height));
                 var c = Color.Parse(m.FontColorHex);
-                var fontResourceName = m.IsBold ? "/ArialBold" : "/Arial";
+                var fontResourceName = GetFontResourceName(m);
                 a.Elements.SetString("/DA",
                     $"{fontResourceName} {m.FontSize.ToString(CultureInfo.InvariantCulture)} Tf " +
                     $"{(c.R / 255.0).ToString(CultureInfo.InvariantCulture)} " +
@@ -159,21 +167,22 @@ public static class PdfAnnotationService
     private static string CreateDefaultStyle(FreeTextAnnotationModel model)
     {
         var color = Color.Parse(model.FontColorHex);
-        var weight = model.IsBold ? "bold" : "normal";
+        var weight = GetEffectiveIsBold(model) ? "bold" : "normal";
         var alignment = model.HorizontalTextAlignment switch
         {
             AnnotationHorizontalTextAlignment.Center => "center",
             AnnotationHorizontalTextAlignment.Right => "right",
             _ => "left"
         };
-        return $"font: {weight} Arial {model.FontSize.ToString(CultureInfo.InvariantCulture)}pt; " +
+        var fontFamily = ResolvePdfFontFamily(model);
+        return $"font: {weight} {fontFamily} {model.FontSize.ToString(CultureInfo.InvariantCulture)}pt; " +
                $"text-align:{alignment}; color:#{color.R:X2}{color.G:X2}{color.B:X2}";
     }
 
     private static string CreateRichTextValue(FreeTextAnnotationModel model)
     {
         var color = Color.Parse(model.FontColorHex);
-        var weight = model.IsBold ? "bold" : "normal";
+        var weight = GetEffectiveIsBold(model) ? "bold" : "normal";
         var alignment = model.HorizontalTextAlignment switch
         {
             AnnotationHorizontalTextAlignment.Center => "center",
@@ -182,7 +191,8 @@ public static class PdfAnnotationService
         };
         var escapedText = SecurityElement.Escape(model.Text ?? string.Empty) ?? string.Empty;
         escapedText = escapedText.Replace("\r\n", "<br/>").Replace("\r", "<br/>").Replace("\n", "<br/>");
-        var style = $"font-family:Arial,sans-serif;font-size:{model.FontSize.ToString(CultureInfo.InvariantCulture)}pt;" +
+        var fontFamily = ResolvePdfFontFamily(model);
+        var style = $"font-family:{fontFamily},sans-serif;font-size:{model.FontSize.ToString(CultureInfo.InvariantCulture)}pt;" +
                     $"font-weight:{weight};font-style:normal;text-align:{alignment};" +
                     $"color:#{color.R:X2}{color.G:X2}{color.B:X2}";
         return $"<?xml version=\"1.0\"?><body xmlns=\"http://www.w3.org/1999/xhtml\" " +
@@ -230,7 +240,7 @@ public static class PdfAnnotationService
         var font = new XFont(
             ResolvePdfFontFamily(model),
             Math.Max(1, model.FontSize),
-            model.IsBold ? XFontStyleEx.Bold : XFontStyleEx.Regular);
+            GetEffectiveIsBold(model) ? XFontStyleEx.Bold : XFontStyleEx.Regular);
         var format = new XStringFormat
         {
             Alignment = model.HorizontalTextAlignment switch
@@ -246,7 +256,9 @@ public static class PdfAnnotationService
                 _ => XLineAlignment.Near
             }
         };
-        var padding = 2.0;
+        var padding = model.FontFamily.Equals("Arial Unicode MS", StringComparison.OrdinalIgnoreCase)
+            ? 1.5
+            : 3.0;
         var textRectangle = new XRect(
             x + padding,
             y + padding,
@@ -270,10 +282,32 @@ public static class PdfAnnotationService
         }
     }
 
+    private static string ResolveLoadedFontFamily(string fontResourceName)
+    {
+        var normalizedResourceName = fontResourceName.TrimStart('/');
+        return normalizedResourceName.Equals("ArialUnicode", StringComparison.OrdinalIgnoreCase) ||
+               normalizedResourceName.Equals("ArialUnicodeBold", StringComparison.OrdinalIgnoreCase)
+            ? "Arial Unicode MS"
+            : "Arial";
+    }
+
     private static string ResolvePdfFontFamily(FreeTextAnnotationModel model)
     {
-        var text = model.Text ?? string.Empty;
-        return text.Any(c => c > 127) ? "SimSun" : "Arial";
+        if (model.FontFamily.Equals("Arial Unicode MS", StringComparison.OrdinalIgnoreCase))
+            return "Arial Unicode MS";
+
+        return "Arial";
+    }
+
+    private static bool GetEffectiveIsBold(FreeTextAnnotationModel model) =>
+        !model.FontFamily.Equals("Arial Unicode MS", StringComparison.OrdinalIgnoreCase) && model.IsBold;
+
+    private static string GetFontResourceName(FreeTextAnnotationModel model)
+    {
+        if (model.FontFamily.Equals("Arial Unicode MS", StringComparison.OrdinalIgnoreCase))
+            return "/ArialUnicode";
+
+        return GetEffectiveIsBold(model) ? "/ArialBold" : "/Arial";
     }
 
     private static PdfDictionary CreateAnnotationFontResources(
@@ -282,45 +316,44 @@ public static class PdfAnnotationService
     {
         GlobalFontSettings.UseWindowsFontsUnderWindows = true;
 
-        var resourcePage = document.AddPage();
-        using (var graphics = XGraphics.FromPdfPage(resourcePage))
-        {
-            var regularFont = new XFont("Arial", 12, XFontStyleEx.Regular);
-            var boldFont = new XFont("Arial", 12, XFontStyleEx.Bold);
-            var regularText = annotations.Where(a => !a.IsBold).Select(a => a.Text).Where(t => !string.IsNullOrEmpty(t)).ToList();
-            var boldText = annotations.Where(a => a.IsBold).Select(a => a.Text).Where(t => !string.IsNullOrEmpty(t)).ToList();
-            if (regularText.Count == 0) regularText.Add("A");
-            if (boldText.Count == 0) boldText.Add("B");
-
-            for (var i = 0; i < regularText.Count; i++)
-                graphics.DrawString(regularText[i], regularFont, XBrushes.Black, new XPoint(-1000, -1000 - i * 20));
-            for (var i = 0; i < boldText.Count; i++)
-                graphics.DrawString(boldText[i], boldFont, XBrushes.Black, new XPoint(-1000, -2000 - i * 20));
-        }
-
-        var generatedFonts = resourcePage.Elements.GetDictionary("/Resources")?.Elements.GetDictionary("/Font");
-        if (generatedFonts is null)
-            throw new InvalidOperationException("PDFsharp did not generate font resources for FreeText annotations.");
-
         var result = new PdfDictionary(document);
-        foreach (var key in generatedFonts.Elements.Keys)
-        {
-            var fontObject = generatedFonts.Elements.GetObject(key) as PdfDictionary;
-            var baseFont = fontObject?.Elements.GetName("/BaseFont") ?? string.Empty;
-            var resourceName = baseFont.Contains("Bold", StringComparison.OrdinalIgnoreCase)
-                ? "/ArialBold"
-                : "/Arial";
-            if (!result.Elements.ContainsKey(resourceName))
-                result.Elements.Add(resourceName, generatedFonts.Elements[key]);
-        }
-
-        document.Pages.Remove(resourcePage);
-        if (!result.Elements.ContainsKey("/Arial") || !result.Elements.ContainsKey("/ArialBold"))
-            throw new InvalidOperationException("PDFsharp did not generate both Arial and Arial Bold resources.");
+        AddAnnotationFontResource(document, result, "/Arial", "Arial", XFontStyleEx.Regular, "A");
+        AddAnnotationFontResource(document, result, "/ArialBold", "Arial", XFontStyleEx.Bold, "A");
+        AddAnnotationFontResource(document, result, "/ArialUnicode", "Arial Unicode MS", XFontStyleEx.Regular, "中");
 
         var resourceDictionary = new PdfDictionary(document);
         resourceDictionary.Elements.SetObject("/Font", result);
         return resourceDictionary;
+    }
+
+    private static void AddAnnotationFontResource(
+        PdfDocument document,
+        PdfDictionary result,
+        string resourceName,
+        string familyName,
+        XFontStyleEx style,
+        string sample)
+    {
+        var resourcePage = document.AddPage();
+        try
+        {
+            using (var graphics = XGraphics.FromPdfPage(resourcePage))
+            {
+                var font = new XFont(familyName, 12, style);
+                graphics.DrawString(sample, font, XBrushes.Black, new XPoint(-1000, -1000));
+            }
+
+            var generatedFonts = resourcePage.Elements.GetDictionary("/Resources")?.Elements.GetDictionary("/Font");
+            var generatedFontKey = generatedFonts?.Elements.Keys.FirstOrDefault();
+            if (generatedFonts is null || generatedFontKey is null)
+                throw new InvalidOperationException($"PDFsharp did not generate the {resourceName} annotation font resource.");
+
+            result.Elements.Add(resourceName, generatedFonts.Elements[generatedFontKey]);
+        }
+        finally
+        {
+            document.Pages.Remove(resourcePage);
+        }
     }
 
     private static bool IsBoldFontResource(PdfAnnotation annotation, string resourceName)
@@ -328,10 +361,14 @@ public static class PdfAnnotationService
         if (string.Equals(resourceName, "/ArialBold", StringComparison.OrdinalIgnoreCase))
             return true;
 
+        var normalizedResourceName = resourceName.StartsWith("/", StringComparison.Ordinal)
+            ? resourceName
+            : $"/{resourceName}";
         var fonts = annotation.Elements.GetDictionary("/DR")?.Elements.GetDictionary("/Font");
-        var fontObject = fonts?.Elements.GetObject(resourceName) as PdfDictionary;
+        var fontObject = fonts?.Elements.GetObject(normalizedResourceName) as PdfDictionary;
         var baseFont = fontObject?.Elements.GetName("/BaseFont") ?? string.Empty;
-        return baseFont.Contains("Bold", StringComparison.OrdinalIgnoreCase);
+        return baseFont.Contains("Bold", StringComparison.OrdinalIgnoreCase) ||
+               normalizedResourceName.Contains("Bold", StringComparison.OrdinalIgnoreCase);
     }
 
     private static bool IsFreeTextAnnotation(PdfAnnotation annotation) =>

@@ -1,6 +1,7 @@
 ﻿using AtomNumericUpDown = AtomUI.Desktop.Controls.NumericUpDown;
 using Avalonia;
 using Avalonia.Controls;
+using Avalonia.Controls.Primitives;
 using Avalonia.Data;
 using Avalonia.Input;
 using Avalonia.Interactivity;
@@ -52,7 +53,7 @@ public class DataGridNumericUpDownColumn : DataGridBoundColumn
 
     protected override Control? GenerateEditingElementDirect(DataGridCell cell, object? dataItem)
     {
-        return new AtomNumericUpDown
+        return new DataGridNumericUpDown
         {
             Minimum = Minimum ?? decimal.MinValue,
             Maximum = Maximum ?? decimal.MaxValue,
@@ -105,5 +106,24 @@ public class DataGridNumericUpDownColumn : DataGridBoundColumn
     public override object? CommitCellEdit(Control editingElement)
     {
         return editingElement is AtomNumericUpDown numericUpDown ? numericUpDown.Value : null;
+    }
+
+    private sealed class DataGridNumericUpDown : AtomNumericUpDown
+    {
+        protected override System.Type StyleKeyOverride => typeof(AtomNumericUpDown);
+
+        protected override void OnApplyTemplate(TemplateAppliedEventArgs e)
+        {
+            base.OnApplyTemplate(e);
+            var textBox = e.NameScope.Find<TextBox>("PART_TextBox");
+            if (textBox == null)
+                return;
+
+            Dispatcher.UIThread.Post(() =>
+            {
+                textBox.Focus();
+                textBox.SelectAll();
+            }, DispatcherPriority.Input);
+        }
     }
 }

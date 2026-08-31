@@ -1,4 +1,4 @@
-using System.IO;
+﻿using System.IO;
 using System.Runtime.InteropServices;
 using Avalonia;
 using Avalonia.Media.Imaging;
@@ -16,6 +16,7 @@ public sealed class PdfDocumentLoader : IDisposable
     private double _scaleFactor = 96.0 / 72.0;
     private double _dpiScale = 1.0;
     private double _zoom = 1.0;
+    private bool _disposed;
 
     public IReadOnlyList<Size> PageSizes { get; private set; } = Array.Empty<Size>();
     public int PageCount => PageSizes.Count;
@@ -33,6 +34,7 @@ public sealed class PdfDocumentLoader : IDisposable
     {
         lock (_readerLock)
         {
+            ObjectDisposedException.ThrowIf(_disposed, this);
             DisposeReaderUnsafe();
             _pdfBytes = pdfBytes;
             _zoom = zoom;
@@ -108,7 +110,13 @@ public sealed class PdfDocumentLoader : IDisposable
 
     public void Dispose()
     {
-        lock (_readerLock) { DisposeReaderUnsafe(); }
+        lock (_readerLock)
+        {
+            if (_disposed) return;
+            _disposed = true;
+            DisposeReaderUnsafe();
+            _pdfBytes = null;
+        }
         GC.SuppressFinalize(this);
     }
 

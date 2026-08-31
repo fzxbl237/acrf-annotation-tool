@@ -34,6 +34,8 @@
     <None Update="cdisc_setting.db"
           CopyToOutputDirectory="PreserveNewest"
           CopyToPublishDirectory="PreserveNewest" />
+    <AvaloniaResource Include="Fonts\*.otf" />
+    <AvaloniaResource Include="Fonts\ARIALUNI.TTF" />
     <None Include="Fonts\**\*"
           CopyToOutputDirectory="PreserveNewest"
           CopyToPublishDirectory="PreserveNewest" />

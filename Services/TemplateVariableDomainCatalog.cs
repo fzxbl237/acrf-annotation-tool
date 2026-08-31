@@ -1,4 +1,5 @@
 ﻿using System.Collections.Frozen;
+using System.Text.RegularExpressions;
 using AcrfAnnotationTool.Services.Interface;
 
 namespace AcrfAnnotationTool.Services;
@@ -16,8 +17,15 @@ public sealed class TemplateVariableDomainCatalog
 
     public Task<FrozenDictionary<string, string>> LoadingTask => _loadTask;
 
+    private static readonly Regex SupplementalQualifierPattern = new(
+        @"\bin\s+SUPP(?<domain>[A-Za-z0-9]+)\b",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+
     public async Task<string?> FindDomainAsync(string? annotationText, string? variableName = null)
     {
+        if (TryGetSupplementalQualifierDomain(annotationText, out var supplementalDomain))
+            return supplementalDomain;
+
         var domains = await _loadTask.ConfigureAwait(true);
         foreach (var candidate in GetVariableCandidates(annotationText, variableName))
         {
@@ -44,6 +52,9 @@ public sealed class TemplateVariableDomainCatalog
         string? annotationText,
         string? variableName)
     {
+        if (TryGetSupplementalQualifierDomain(annotationText, out var supplementalDomain))
+            return supplementalDomain;
+
         foreach (var candidate in GetVariableCandidates(annotationText, variableName))
         {
             if (domains.TryGetValue(candidate, out var domain))
@@ -53,24 +64,27 @@ public sealed class TemplateVariableDomainCatalog
         return null;
     }
 
+    private static bool TryGetSupplementalQualifierDomain(string? annotationText, out string? domain)
+    {
+        domain = null;
+        if (string.IsNullOrWhiteSpace(annotationText))
+            return false;
+
+        var match = SupplementalQualifierPattern.Match(annotationText);
+        if (!match.Success)
+            return false;
+
+        domain = match.Groups["domain"].Value.ToUpperInvariant();
+        return !string.IsNullOrWhiteSpace(domain);
+    }
+
     private static IEnumerable<string> GetVariableCandidates(
         string? annotationText,
         string? variableName)
     {
         if (!string.IsNullOrWhiteSpace(annotationText))
         {
-            var text = annotationText.Trim();
-            var suppIndex = text.IndexOf("in SUPP", StringComparison.OrdinalIgnoreCase);
-            if (suppIndex >= 0)
-            {
-                var suppDomain = text[(suppIndex + "in SUPP".Length)..]
-                    .Split([' ', '\t', '\r', '\n', '='], StringSplitOptions.RemoveEmptyEntries)
-                    .FirstOrDefault();
-                if (!string.IsNullOrWhiteSpace(suppDomain))
-                    yield return suppDomain.Trim();
-            }
-
-            var variable = text
+            var variable = annotationText.Trim()
                 .Split(['=', ' ', '\t', '\r', '\n'], StringSplitOptions.RemoveEmptyEntries)
                 .FirstOrDefault();
             foreach (var candidate in ExpandVariableName(variable))

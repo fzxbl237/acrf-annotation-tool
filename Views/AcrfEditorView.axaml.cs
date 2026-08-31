@@ -20,6 +20,8 @@ public partial class AcrfEditorView : UserControl
 
         DomainAnnotationHorizontalOffsetInput.Value = (decimal)viewModel.DomainAnnotationHorizontalOffset;
         DomainAnnotationVerticalOffsetInput.Value = (decimal)viewModel.DomainAnnotationVerticalOffset;
+        PdfAnnotationEditingCheckBox.IsChecked = viewModel.IsPdfAnnotationEditingEnabled;
+        LanguageToggleSwitch.IsChecked = viewModel.Language;
         DomainAnnotationSettingsErrorText.IsVisible = false;
         DomainAnnotationSettingsDialog.PlacementTarget = DomainAnnotationSettingsButton;
         DomainAnnotationSettingsDialog.IsOpen = true;
@@ -41,7 +43,11 @@ public partial class AcrfEditorView : UserControl
         if (DataContext is not AcrfDocumentViewModel viewModel)
             return;
 
-        viewModel.ApplyDomainAnnotationOffsets((double)horizontalValue, (double)verticalValue);
+        viewModel.ApplyDomainAnnotationSettings(
+            (double)horizontalValue,
+            (double)verticalValue,
+            PdfAnnotationEditingCheckBox.IsChecked == true,
+            LanguageToggleSwitch.IsChecked == true);
         dialog.IsOpen = false;
     }
 }

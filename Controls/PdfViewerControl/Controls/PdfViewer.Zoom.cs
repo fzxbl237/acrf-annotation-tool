@@ -1,4 +1,4 @@
-using Avalonia;
+﻿using Avalonia;
 using Avalonia.Controls.Primitives;
 using Avalonia.Input;
 using PdfViewerControl.Helpers;
@@ -75,11 +75,15 @@ public partial class PdfViewer
         var keep = keepVisible ? new HashSet<int>(GetVisiblePageRange(ViewportPageBuffer)) : null;
         foreach (var s in _pageSlots)
         {
-            if (keep != null && keep.Contains(s.PageIndex) && s.PageImage.Source != null)
+            if (keep != null && keep.Contains(s.PageIndex) && s.PageImage?.Source != null)
             {
-                s.IsBitmapLoaded = false; s.IsRendering = false; s.LoadingOverlay.IsVisible = false; continue;
+                s.IsBitmapLoaded = false;
+                s.IsRendering = false;
+                if (s.LoadingOverlay is { } loadingOverlay)
+                    loadingOverlay.IsVisible = false;
+                continue;
             }
-            s.PageImage.Source = null; s.IsBitmapLoaded = false; s.IsRendering = false; s.LoadingOverlay.IsVisible = false;
+            ReleasePageBitmap(s);
         }
     }
 
@@ -89,9 +93,9 @@ public partial class PdfViewer
         var keep = new HashSet<int>(GetVisiblePageRange(ViewportPageBuffer));
         foreach (var s in _pageSlots)
         {
-            if (!keep.Contains(s.PageIndex) && s.PageImage.Source != null)
+            if (!keep.Contains(s.PageIndex) && s.PageImage?.Source != null)
             {
-                s.PageImage.Source = null; s.IsBitmapLoaded = false; s.IsRendering = false; s.LoadingOverlay.IsVisible = false;
+                ReleasePageBitmap(s);
             }
         }
     }

@@ -67,8 +67,16 @@ public abstract class DataGridColumn : AvaloniaObject
 
     public void ClearFilter()
     {
+        if (_activeFilterValues == null)
+            return;
+
         _activeFilterValues = null;
         DataGridOwner?.OnFilterChanged(this);
+    }
+
+    internal void ClearFilterSilent()
+    {
+        _activeFilterValues = null;
     }
 
     public bool PassesFilter(object? dataItem)

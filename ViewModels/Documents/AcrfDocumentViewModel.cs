@@ -39,10 +39,17 @@ public partial class AcrfDocumentViewModel : Document
 
     private static readonly PdfFont AnnotationMeasurementFont = CreateAnnotationMeasurementFont();
     private static readonly PdfFont DomainAnnotationMeasurementFont = CreateDomainAnnotationMeasurementFont();
+    private static readonly PdfFont ChineseAnnotationMeasurementFont = CreateChineseAnnotationMeasurementFont();
+    private static readonly PdfFont ChineseDomainAnnotationMeasurementFont = CreateChineseDomainAnnotationMeasurementFont();
     private const float AnnotationFontSize = 12;
-    private const double AnnotationHorizontalPadding = 6;
+    private const double AnnotationHorizontalPadding = 10;
+    private const double AnnotationLineHeight = AnnotationFontSize * 1.2;
+    private const double AnnotationVerticalPadding = 4;
+    private const double ChineseAnnotationAdditionalLineSpacing = 2.28;
+    private const double LegacyChineseAnnotationLineHeight = AnnotationFontSize * 1.35;
+    private const double LegacyChineseAnnotationVerticalPadding = 6;
     private const float DomainAnnotationFontSize = 10;
-    private const double DomainAnnotationHorizontalPadding = 8;
+    private const double DomainAnnotationHorizontalPadding = 10;
 
     private readonly SourceList<Annotation> _source = new();
     private readonly ReadOnlyObservableCollection<Annotation> _annotations;
@@ -52,7 +59,8 @@ public partial class AcrfDocumentViewModel : Document
     private DataGrid? _annotationGrid;
     private Window? _window;
     private readonly HashSet<Annotation> _observedAnnotations = new();
-    private readonly Dictionary<Annotation, int> _annotationTextSyncVersions = new();
+    private readonly Dictionary<Annotation, long> _annotationTextSyncVersions = new();
+    private long _nextAnnotationTextSyncVersion;
     private readonly CdiscDatasetCatalog _cdiscDatasetCatalog;
     private readonly TemplateVariableDomainCatalog _variableDomainCatalog;
     private readonly IMessageService _messageService;
@@ -66,6 +74,31 @@ public partial class AcrfDocumentViewModel : Document
     public string? PdfPath { get => _pdfPath; private set => SetProperty(ref _pdfPath, value); }
     public double DomainAnnotationHorizontalOffset { get; private set; }
     public double DomainAnnotationVerticalOffset { get; private set; }
+    public bool IsPdfAnnotationEditingEnabled { get; private set; }
+    public bool Language { get; private set; }
+    private string GetAnnotationFontFamily() => Language ? "Arial Unicode MS" : "Arial";
+
+    private void ApplyAnnotationFontFamily()
+    {
+        if (_viewer is null)
+            return;
+
+        _viewer.AnnotationFontFamily = GetAnnotationFontFamily();
+        foreach (var model in _viewer.GetAnnotations())
+        {
+            _viewer.UpdateAnnotation(model.Id, annotation =>
+            {
+                annotation.FontFamily = _viewer.AnnotationFontFamily;
+                if (Language)
+                    annotation.IsBold = false;
+            });
+        }
+        foreach (var model in _viewer.GetDomainAnnotationModels())
+        {
+            model.FontFamily = _viewer.AnnotationFontFamily;
+            model.IsBold = !Language;
+        }
+    }
 
     [ObservableProperty]
     private Annotation? _selectedItem;
@@ -83,6 +116,9 @@ public partial class AcrfDocumentViewModel : Document
         var settings = ApplicationSettingsStore.Load();
         DomainAnnotationHorizontalOffset = settings.DomainAnnotationHorizontalOffset;
         DomainAnnotationVerticalOffset = settings.DomainAnnotationVerticalOffset;
+        IsPdfAnnotationEditingEnabled = settings.IsPdfAnnotationEditingEnabled ?? false;
+        Language = settings.Language;
+        _cdiscDatasetCatalog.SetLanguage(Language);
         _source.Connect().Bind(out _annotations).Subscribe();
     }
 
@@ -98,6 +134,7 @@ public partial class AcrfDocumentViewModel : Document
                 _viewer.AnnotationChanged -= OnAnnotationChanged;
                 _viewer.AnnotationSelected -= OnAnnotationSelected;
                 _viewer.DocumentLoaded -= OnViewerDocumentLoaded;
+                _viewer.Dispose();
             }
             _viewer = viewer;
             _viewer.AnnotationMoved += OnAnnotationMoved;
@@ -108,6 +145,8 @@ public partial class AcrfDocumentViewModel : Document
             _viewer.DocumentLoaded += OnViewerDocumentLoaded;
         }
 
+        _viewer.IsAnnotationEditingEnabled = IsPdfAnnotationEditingEnabled;
+        _viewer.AnnotationFontFamily = GetAnnotationFontFamily();
         _window = window;
         if (!string.IsNullOrWhiteSpace(PdfPath) && !string.Equals(_viewer.DocumentPath, PdfPath, StringComparison.OrdinalIgnoreCase))
             _viewer.LoadDocument(PdfPath);
@@ -220,7 +259,13 @@ public partial class AcrfDocumentViewModel : Document
         if (string.IsNullOrWhiteSpace(path))
             return;
 
-        _viewer.SaveAnnotations(path);
+        if (!_viewer.SaveAnnotations(path, out var error))
+        {
+            Status = error ?? "PDF 另存失败";
+            _messageService.Error(Status);
+            return;
+        }
+
         Status = $"PDF 注释已另存为：{Path.GetFileName(path)}";
         _messageService.Success(Status);
     }
@@ -235,7 +280,13 @@ public partial class AcrfDocumentViewModel : Document
         if (string.IsNullOrWhiteSpace(path))
             return;
 
-        _viewer.SaveAnnotationsFlattened(path);
+        if (!_viewer.SaveAnnotationsFlattened(path, out var error))
+        {
+            Status = error ?? "PDF Flatten 另存失败";
+            _messageService.Error(Status);
+            return;
+        }
+
         Status = $"Flatten PDF 已另存为：{Path.GetFileName(path)}";
         _messageService.Success(Status);
     }
@@ -286,7 +337,9 @@ public partial class AcrfDocumentViewModel : Document
             copy.FormOutline = string.Empty;
         }
         if (!string.IsNullOrWhiteSpace(copy.AnnotationText))
-            copy.X += Math.Max(copy.Width, 0) + 10;
+            copy.X += (int)Math.Round(GetAnnotationWidth(source)) + 10;
+        copy.Width = 0;
+        copy.Line = 1;
 
         var index = _source.Items.ToList().IndexOf(source);
         _source.Edit(updater => updater.Insert(Math.Max(0, index + 1), copy));
@@ -297,7 +350,18 @@ public partial class AcrfDocumentViewModel : Document
         Status = "已复制选中注释";
     }
 
-    public void ApplyDomainAnnotationOffsets(double horizontalOffset, double verticalOffset)
+    public void ApplyDomainAnnotationOffsets(double horizontalOffset, double verticalOffset) =>
+        ApplyDomainAnnotationSettings(
+            horizontalOffset,
+            verticalOffset,
+            IsPdfAnnotationEditingEnabled,
+            Language);
+
+    public void ApplyDomainAnnotationSettings(
+        double horizontalOffset,
+        double verticalOffset,
+        bool isPdfAnnotationEditingEnabled,
+        bool language)
     {
         if (!double.IsFinite(horizontalOffset) || !double.IsFinite(verticalOffset) ||
             horizontalOffset < 0 || verticalOffset < 0)
@@ -305,20 +369,33 @@ public partial class AcrfDocumentViewModel : Document
             return;
         }
 
+        var previousLanguage = Language;
         DomainAnnotationHorizontalOffset = horizontalOffset;
         DomainAnnotationVerticalOffset = verticalOffset;
+        IsPdfAnnotationEditingEnabled = isPdfAnnotationEditingEnabled;
+        Language = language;
+        _cdiscDatasetCatalog.SetLanguage(language);
+        if (_viewer is not null)
+        {
+            _viewer.IsAnnotationEditingEnabled = isPdfAnnotationEditingEnabled;
+            ApplyAnnotationFontFamily();
+            RefreshAutomaticAnnotationHeights(previousLanguage);
+        }
         GenerateDomainAnnotations();
 
         var settings = new ApplicationSettings(
             horizontalOffset,
-            verticalOffset);
+            verticalOffset,
+            isPdfAnnotationEditingEnabled,
+            language);
         if (ApplicationSettingsStore.TrySave(settings, out var error))
         {
-            Status = $"Domain annotation 位置已更新：水平 {horizontalOffset:0.##}，垂直 {verticalOffset:0.##}";
+            var editingStatus = isPdfAnnotationEditingEnabled ? "允许" : "禁止";
+            Status = $"Domain annotation 位置已更新；PDF 注释编辑：{editingStatus}";
         }
         else
         {
-            Status = $"Domain annotation 位置已更新，但配置保存失败：{error}";
+            Status = $"设置已更新，但配置保存失败：{error}";
         }
     }
 
@@ -331,45 +408,125 @@ public partial class AcrfDocumentViewModel : Document
 
     private static PdfFont CreateAnnotationMeasurementFont()
     {
-        var unicodeFontPath = Path.Combine(
-            AppContext.BaseDirectory,
-            "Fonts",
-            "ARIALUNI.TTF");
-        if (File.Exists(unicodeFontPath))
-            return PdfFontFactory.CreateFont(unicodeFontPath, PdfEncodings.IDENTITY_H);
+        var fontPath = Path.Combine(AppContext.BaseDirectory, "Fonts", "ARIAL.TTF");
+        if (File.Exists(fontPath))
+            return PdfFontFactory.CreateFont(fontPath, PdfEncodings.IDENTITY_H);
 
         return PdfFontFactory.CreateFont(iText.IO.Font.Constants.StandardFonts.HELVETICA);
     }
 
     private static PdfFont CreateDomainAnnotationMeasurementFont()
     {
-        var boldFontPath = Path.Combine(
-            AppContext.BaseDirectory,
-            "Fonts",
-            "ARIALBD.TTF");
-        if (File.Exists(boldFontPath))
-            return PdfFontFactory.CreateFont(boldFontPath, PdfEncodings.IDENTITY_H);
+        var fontPath = Path.Combine(AppContext.BaseDirectory, "Fonts", "ARIALBD.TTF");
+        if (File.Exists(fontPath))
+            return PdfFontFactory.CreateFont(fontPath, PdfEncodings.IDENTITY_H);
 
         return PdfFontFactory.CreateFont(iText.IO.Font.Constants.StandardFonts.HELVETICA_BOLD);
     }
 
-    private static double GetAnnotationTextWidth(string text)
+    private static PdfFont CreateChineseAnnotationMeasurementFont()
     {
+        var fontPath = Path.Combine(AppContext.BaseDirectory, "Fonts", "ARIALUNI.TTF");
+        if (File.Exists(fontPath))
+            return PdfFontFactory.CreateFont(fontPath, PdfEncodings.IDENTITY_H);
+
+        return PdfFontFactory.CreateFont(iText.IO.Font.Constants.StandardFonts.HELVETICA);
+    }
+
+    private static PdfFont CreateChineseDomainAnnotationMeasurementFont()
+    {
+        var fontPath = Path.Combine(AppContext.BaseDirectory, "Fonts", "ARIALUNI.TTF");
+        if (File.Exists(fontPath))
+            return PdfFontFactory.CreateFont(fontPath, PdfEncodings.IDENTITY_H);
+
+        return PdfFontFactory.CreateFont(iText.IO.Font.Constants.StandardFonts.HELVETICA);
+    }
+
+    private PdfFont GetAnnotationMeasurementFont() =>
+        Language ? ChineseAnnotationMeasurementFont : AnnotationMeasurementFont;
+
+    private PdfFont GetDomainAnnotationMeasurementFont() =>
+        Language ? ChineseDomainAnnotationMeasurementFont : DomainAnnotationMeasurementFont;
+
+    private double GetAnnotationTextWidth(string text)
+    {
+        var font = GetAnnotationMeasurementFont();
         var maxLineWidth = text
             .Split(["\r\n", "\r", "\n"], StringSplitOptions.None)
-            .Select(line => (double)AnnotationMeasurementFont.GetWidth(line, AnnotationFontSize))
+            .Select(line => (double)font.GetWidth(line, AnnotationFontSize))
             .DefaultIfEmpty(0)
             .Max();
         return Math.Max(1, maxLineWidth + AnnotationHorizontalPadding);
     }
 
-    private static double GetAnnotationWidth(Annotation annotation) =>
-        annotation.Width > 0 ? annotation.Width : GetAnnotationTextWidth(annotation.AnnotationText);
-
-    private static double GetDomainAnnotationWidth(string text)
+    private double GetAnnotationWidth(string? text, double currentWidth)
     {
-        var measuredWidth = DomainAnnotationMeasurementFont.GetWidth(text, DomainAnnotationFontSize);
+        return currentWidth > 0
+            ? currentWidth
+            : GetAnnotationTextWidth(text ?? string.Empty);
+    }
+
+    private double GetAnnotationWidth(Annotation annotation) =>
+        GetAnnotationWidth(annotation.AnnotationText, annotation.Width);
+
+    private double GetAnnotationHeight(int lineCount) =>
+        GetAnnotationHeight(lineCount, Language);
+
+    private static double GetAnnotationHeight(int lineCount, bool language)
+    {
+        var lines = Math.Max(lineCount, 1);
+        var additionalLineSpacing = language
+            ? (lines - 1) * ChineseAnnotationAdditionalLineSpacing
+            : 0;
+        return lines * AnnotationLineHeight + AnnotationVerticalPadding + additionalLineSpacing;
+    }
+
+    private static double GetLegacyAnnotationHeight(int lineCount, bool language) =>
+        language
+            ? Math.Max(lineCount, 1) * LegacyChineseAnnotationLineHeight + LegacyChineseAnnotationVerticalPadding
+            : GetAnnotationHeight(lineCount, false);
+
+    private int GetAnnotationLineCount(double height)
+    {
+        var lineHeight = AnnotationLineHeight + (Language ? ChineseAnnotationAdditionalLineSpacing : 0);
+        var verticalPadding = AnnotationVerticalPadding - (Language ? ChineseAnnotationAdditionalLineSpacing : 0);
+        return Math.Max(1, (int)Math.Round(
+            Math.Max(0, height - verticalPadding) / lineHeight));
+    }
+
+    private double GetDomainAnnotationWidth(string text)
+    {
+        var measuredWidth = GetDomainAnnotationMeasurementFont().GetWidth(text, DomainAnnotationFontSize);
         return Math.Max(20, measuredWidth + DomainAnnotationHorizontalPadding);
+    }
+
+    private void RefreshAutomaticAnnotationHeights(bool previousLanguage)
+    {
+        if (_viewer is null || previousLanguage == Language)
+            return;
+
+        _synchronizing = true;
+        try
+        {
+            foreach (var row in _annotations)
+            {
+                var model = _viewer.GetAnnotationById(row.AnnotationUniqueId);
+                if (model is null)
+                    continue;
+
+                var previousHeight = GetAnnotationHeight(row.Line, previousLanguage);
+                var legacyPreviousHeight = GetLegacyAnnotationHeight(row.Line, previousLanguage);
+                var height = GetAnnotationHeight(row.Line);
+                var hasAutomaticHeight = Math.Abs(model.Height - previousHeight) <= 0.1 ||
+                                         Math.Abs(model.Height - legacyPreviousHeight) <= 0.1;
+                if (hasAutomaticHeight && Math.Abs(model.Height - height) > 0.1)
+                    _viewer.UpdateAnnotationSize(model.Id, model.Width, height);
+            }
+        }
+        finally
+        {
+            _synchronizing = false;
+        }
     }
 
     private static string? NormalizeDomainCode(string? domain)
@@ -459,8 +616,39 @@ public partial class AcrfDocumentViewModel : Document
 
     private async void OnViewerDocumentLoaded(object? sender, EventArgs e)
     {
+        NormalizeLoadedAnnotationHeights();
+        ApplyAnnotationFontFamily();
         await SynchronizeAnnotationDomainsAsync(_annotations);
         RefreshAllAnnotationColors();
+    }
+
+    private void NormalizeLoadedAnnotationHeights()
+    {
+        if (_viewer is null || !Language)
+            return;
+
+        _synchronizing = true;
+        try
+        {
+            foreach (var row in _annotations)
+            {
+                var model = _viewer.GetAnnotationById(row.AnnotationUniqueId);
+                if (model is null)
+                    continue;
+
+                var previousUnifiedHeight = GetAnnotationHeight(row.Line, false);
+                var legacyHeight = GetLegacyAnnotationHeight(row.Line, true);
+                var height = GetAnnotationHeight(row.Line, true);
+                var hasAutomaticHeight = Math.Abs(model.Height - previousUnifiedHeight) <= 0.1 ||
+                                         Math.Abs(model.Height - legacyHeight) <= 0.1;
+                if (hasAutomaticHeight && Math.Abs(model.Height - height) > 0.1)
+                    _viewer.UpdateAnnotationSize(model.Id, model.Width, height);
+            }
+        }
+        finally
+        {
+            _synchronizing = false;
+        }
     }
 
     private void SyncRowsToPdf(IEnumerable<Annotation> rows)
@@ -478,9 +666,10 @@ public partial class AcrfDocumentViewModel : Document
                     PdfX = row.X,
                     PdfY = row.Y,
                     Width = GetAnnotationWidth(row),
-                    Height = Math.Max(row.Line, 1) * 18,
+                    Height = GetAnnotationHeight(row.Line),
                     Text = row.AnnotationText,
                     FontSize = 12,
+                    FontFamily = GetAnnotationFontFamily(),
                     BorderStyle = row.AnnotationDotted
                         ? PdfViewerControl.Models.AnnotationBorderStyle.Dashed
                         : PdfViewerControl.Models.AnnotationBorderStyle.Solid,
@@ -497,12 +686,13 @@ public partial class AcrfDocumentViewModel : Document
     private void CreatePdfAnnotation(Annotation row)
     {
         if (_viewer is null || row.PageNum <= 0 || string.IsNullOrWhiteSpace(row.AnnotationText)) return;
+        var width = GetAnnotationWidth(row);
         var model = _viewer.CreateAnnotation(
             row.PageNum - 1,
             row.X,
             row.Y,
-            GetAnnotationWidth(row),
-            Math.Max(row.Line, 1) * 18,
+            width,
+            GetAnnotationHeight(row.Line),
             row.AnnotationText,
             12,
             scrollIntoView: false,
@@ -526,8 +716,7 @@ public partial class AcrfDocumentViewModel : Document
             row.PageNum = e.Annotation.PageIndex + 1;
             row.X = (int)Math.Round(e.Annotation.PdfX);
             row.Y = (int)Math.Round(e.Annotation.PdfY);
-            row.Width = (int)Math.Round(e.Annotation.Width);
-            row.Line = Math.Max(1, (int)Math.Round(e.Annotation.Height / 18d));
+            row.Line = GetAnnotationLineCount(e.Annotation.Height);
             RefreshAllAnnotationColors();
         }
         finally { _synchronizing = false; }
@@ -543,8 +732,16 @@ public partial class AcrfDocumentViewModel : Document
                 newValue.AnnotationUniqueId,
                 StringComparison.Ordinal))
         {
-            _viewer.SelectAnnotationById(newValue.AnnotationUniqueId);
-            _viewer.ScrollAnnotationIntoView(newValue.AnnotationUniqueId);
+            if (_viewer.SelectAnnotationById(newValue.AnnotationUniqueId))
+            {
+                _viewer.ScrollAnnotationIntoView(newValue.AnnotationUniqueId);
+            }
+            else
+            {
+                _viewer.ClearAnnotationSelection();
+                if (newValue.PageNum > 0)
+                    _viewer.ScrollToPageNumber(newValue.PageNum);
+            }
         }
 
         _annotationGrid?.ScrollIntoView(newValue);
@@ -578,13 +775,13 @@ public partial class AcrfDocumentViewModel : Document
     {
         if (_observedAnnotations.Remove(annotation))
             annotation.PropertyChanged -= OnAnnotationPropertyChanged;
+        _annotationTextSyncVersions.Remove(annotation);
     }
 
     private void UnobserveAllAnnotations()
     {
         foreach (var annotation in _observedAnnotations.ToList())
-            annotation.PropertyChanged -= OnAnnotationPropertyChanged;
-        _observedAnnotations.Clear();
+            UnobserveAnnotation(annotation);
     }
 
     private static void EnableDottedBorderForNotSubmitted(Annotation row)
@@ -634,7 +831,7 @@ public partial class AcrfDocumentViewModel : Document
                 _viewer.UpdateAnnotationSize(
                     row.AnnotationUniqueId,
                     GetAnnotationWidth(row),
-                    Math.Max(row.Line, 1) * 18);
+                    GetAnnotationHeight(row.Line));
                 return;
             }
 
@@ -651,9 +848,7 @@ public partial class AcrfDocumentViewModel : Document
 
     private async Task SynchronizeAnnotationTextAsync(Annotation row)
     {
-        var version = _annotationTextSyncVersions.TryGetValue(row, out var currentVersion)
-            ? currentVersion + 1
-            : 1;
+        var version = ++_nextAnnotationTextSyncVersion;
         _annotationTextSyncVersions[row] = version;
 
         var domain = await _variableDomainCatalog.FindDomainAsync(
@@ -706,15 +901,16 @@ public partial class AcrfDocumentViewModel : Document
     {
         if (_synchronizing) return;
         var model = e.Annotation;
+        var annotationText = FreeTextAnnotationControl.IsPlaceholderContent(model.Text) ? string.Empty : model.Text;
         var row = new Annotation
         {
             AnnotationUniqueId = model.Id,
             PageNum = model.PageIndex + 1,
             X = (int)Math.Round(model.PdfX),
             Y = (int)Math.Round(model.PdfY),
-            Width = (int)Math.Round(model.Width),
-            Line = Math.Max(1, (int)Math.Round(model.Height / 18d)),
-            AnnotationText = FreeTextAnnotationControl.IsPlaceholderContent(model.Text) ? string.Empty : model.Text,
+            Width = 0,
+            Line = GetAnnotationLineCount(model.Height),
+            AnnotationText = annotationText,
             Type = "Variable"
         };
         _source.Add(row);
@@ -748,8 +944,7 @@ public partial class AcrfDocumentViewModel : Document
             row.PageNum = e.Annotation.PageIndex + 1;
             row.X = (int)Math.Round(e.Annotation.PdfX);
             row.Y = (int)Math.Round(e.Annotation.PdfY);
-            row.Width = (int)Math.Round(e.Annotation.Width);
-            row.Line = Math.Max(1, (int)Math.Round(e.Annotation.Height / 18d));
+            row.Line = GetAnnotationLineCount(e.Annotation.Height);
 
             var annotationText = FreeTextAnnotationControl.IsPlaceholderContent(e.Annotation.Text)
                 ? string.Empty
