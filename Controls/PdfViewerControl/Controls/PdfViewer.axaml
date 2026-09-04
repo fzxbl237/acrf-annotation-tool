@@ -1,5 +1,6 @@
 ﻿<UserControl xmlns="https://github.com/avaloniaui"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:antd-icons="https://atomui.net/icons/antdesign"
              xmlns:atom="https://atomui.net"
              x:Class="PdfViewerControl.Controls.PdfViewer"
              Background="#FFF3F4F6">
@@ -11,9 +12,6 @@
         </Grid.RowDefinitions>
         <Border Grid.Row="0" Background="White" BorderBrush="#FFE5E7EB" BorderThickness="0,0,0,1" Padding="8,6">
             <WrapPanel VerticalAlignment="Center">
-                <atom:Button x:Name="PrevPageButton" Content="上一页" Width="72" Margin="0,0,4,0" Click="PrevPage_OnClick" />
-                <TextBlock x:Name="PageInfoText" VerticalAlignment="Center" Margin="4,0" Text="0 / 0" />
-                <atom:Button x:Name="NextPageButton" Content="下一页" Width="72" Margin="4,0,16,0" Click="NextPage_OnClick" />
                 <TextBlock Text="缩放：" VerticalAlignment="Center" Margin="0,0,4,0" />
                 <Slider x:Name="ZoomSlider" Width="160" Minimum="25" Maximum="400" Value="100" ValueChanged="ZoomSlider_OnValueChanged" />
                 <TextBlock x:Name="ZoomLabel" VerticalAlignment="Center" Margin="4,0,0,0" Text="100%" />
@@ -22,6 +20,18 @@
         <ScrollViewer x:Name="MainScrollViewer" Grid.Row="1" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" ScrollChanged="MainScrollViewer_OnScrollChanged" PointerPressed="ScrollViewer_OnBackgroundClick">
             <StackPanel x:Name="PagesPanel" HorizontalAlignment="Center" Margin="16" />
         </ScrollViewer>
+        <Grid x:Name="PageNumberHotspot" Grid.Row="1" Height="84" VerticalAlignment="Bottom" HorizontalAlignment="Stretch" ZIndex="10" Background="Transparent" PointerEntered="PageNumberHotspot_OnPointerEntered" PointerExited="PageNumberHotspot_OnPointerExited">
+            <Border x:Name="PageNumberBar" IsVisible="False" HorizontalAlignment="Center" VerticalAlignment="Bottom" Margin="0,0,0,12" Padding="6" Background="#FFF9FAFB" BorderBrush="#FF9CA3AF" BorderThickness="1" CornerRadius="8" BoxShadow="0 2 8 #33000000">
+                <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Spacing="2">
+                    <atom:IconButton x:Name="PrevPageButton" Icon="{antd-icons:AntDesignIconProvider Kind=LeftOutlined}" IconWidth="18" IconHeight="18" Width="26" Height="26" MinWidth="0" Padding="0" VerticalAlignment="Center" Click="PrevPage_OnClick" />
+                    <Border Width="40" Height="34" CornerRadius="4" BorderBrush="#FF9CA3AF" BorderThickness="1" Background="White" VerticalAlignment="Center">
+                        <TextBox x:Name="CurrentPageNumberText" Width="38" Height="32" MinWidth="0" MaxWidth="38" HorizontalAlignment="Center" HorizontalContentAlignment="Center" VerticalContentAlignment="Center" TextAlignment="Center" Padding="0" BorderThickness="0" FontSize="16" Foreground="#FF111827" Text="0" MaxLength="9" TextChanged="CurrentPageNumberText_OnTextChanged" KeyDown="CurrentPageNumberText_OnKeyDown" LostFocus="CurrentPageNumberText_OnLostFocus" />
+                    </Border>
+                    <TextBlock x:Name="PageCountText" Width="32" HorizontalAlignment="Center" VerticalAlignment="Center" TextAlignment="Center" FontSize="16" Foreground="#FF111827" />
+                    <atom:IconButton x:Name="NextPageButton" Icon="{antd-icons:AntDesignIconProvider Kind=RightOutlined}" IconWidth="18" IconHeight="18" Width="26" Height="26" MinWidth="0" Padding="0" VerticalAlignment="Center" Click="NextPage_OnClick" />
+                </StackPanel>
+            </Border>
+        </Grid>
         <Border Grid.Row="2" Background="#FFF9FAFB" BorderBrush="#FFE5E7EB" BorderThickness="0,1,0,0" Padding="8,4">
             <TextBlock x:Name="StatusText" Foreground="#FF6B7280" Text="请打开 PDF 文件" />
         </Border>

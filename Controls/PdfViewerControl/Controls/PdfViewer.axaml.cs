@@ -30,6 +30,9 @@ public partial class PdfViewer : UserControl, IDisposable
     private readonly object _slotLoadGate = new();
     private bool _virtualizeRunning, _virtualizePending;
     private DispatcherTimer? _virtualizeScrollTimer;
+    private DispatcherTimer? _pageNumberBarHideTimer;
+    private bool _isPointerOverPageNumberHotspot;
+    private bool _isUpdatingPageNumberText;
     private readonly SemaphoreSlim _pageRenderSemaphore = new(1, 1);
     private bool _suppressSliderZoomSchedule;
     private CancellationTokenSource? _loadCts;
@@ -55,6 +58,16 @@ public partial class PdfViewer : UserControl, IDisposable
         {
             _virtualizeScrollTimer!.Stop();
             RequestVirtualizationImmediate();
+        };
+        _pageNumberBarHideTimer = new DispatcherTimer(DispatcherPriority.Background)
+        {
+            Interval = TimeSpan.FromSeconds(3)
+        };
+        _pageNumberBarHideTimer.Tick += (_, _) =>
+        {
+            _pageNumberBarHideTimer!.Stop();
+            if (!_isPointerOverPageNumberHotspot)
+                PageNumberBar.IsVisible = false;
         };
     }
 
@@ -645,7 +658,46 @@ public partial class PdfViewer : UserControl, IDisposable
         _selectedAnnotation.IsSelected = false;
         _selectedAnnotation = null;
     }
-    private void MainScrollViewer_OnScrollChanged(object? s, ScrollChangedEventArgs e) { if (_loader.PageCount == 0 || _pageSlots.Count == 0) return; if (_suspendScrollPageTracking <= 0) UpdateCurrentPageIndexFromViewport(); ReleaseFramesOutsideVisible(); RequestVirtualization(); }
+    private void MainScrollViewer_OnScrollChanged(object? s, ScrollChangedEventArgs e)
+    {
+        if (_loader.PageCount == 0 || _pageSlots.Count == 0) return;
+        ShowPageNumberBar();
+        if (_suspendScrollPageTracking <= 0) UpdateCurrentPageIndexFromViewport();
+        ReleaseFramesOutsideVisible();
+        RequestVirtualization();
+    }
+
+    private void PageNumberHotspot_OnPointerEntered(object? s, PointerEventArgs e)
+    {
+        _isPointerOverPageNumberHotspot = true;
+        ShowPageNumberBar();
+    }
+
+    private void PageNumberHotspot_OnPointerExited(object? s, PointerEventArgs e)
+    {
+        _isPointerOverPageNumberHotspot = false;
+        SchedulePageNumberBarHide();
+    }
+
+    private void ShowPageNumberBar()
+    {
+        if (_disposed) return;
+        PageNumberBar.IsVisible = true;
+        if (_isPointerOverPageNumberHotspot)
+        {
+            _pageNumberBarHideTimer?.Stop();
+            return;
+        }
+        SchedulePageNumberBarHide();
+    }
+
+    private void SchedulePageNumberBarHide()
+    {
+        if (_disposed || _isPointerOverPageNumberHotspot || _pageNumberBarHideTimer == null) return;
+        _pageNumberBarHideTimer.Stop();
+        _pageNumberBarHideTimer.Start();
+    }
+
     private void UpdateCurrentPageIndexFromViewport() { if (_pageSlots.Count == 0) return; double cy = 16; var vc = MainScrollViewer.Offset.Y + MainScrollViewer.Bounds.Height / 2; int best = 0; for (int i = 0; i < _pageSlots.Count; i++) { var h = GetPageHostHeight(i); if (vc >= cy && vc < cy + h) { best = i; break; } if (vc >= cy + h) best = i; cy += h; } if (best != _currentPageIndex) { _currentPageIndex = best; UpdatePageInfo(); } }
     private double GetPageHostHeight(int i)
     {
@@ -656,7 +708,73 @@ public partial class PdfViewer : UserControl, IDisposable
     }
     private void ScrollToPage(int pi) { if (pi < 0 || pi >= PagesPanel.Children.Count) return; double y = 16; for (int i = 0; i < pi && i < _pageSlots.Count; i++) y += GetPageHostHeight(i); MainScrollViewer.Offset = new Vector(MainScrollViewer.Offset.X, Math.Max(0, y - 8)); }
     private void UpdateZoomLabel() { if (ZoomLabel != null && ZoomSlider != null) ZoomLabel.Text = $"{(int)ZoomSlider.Value}%"; }
-    private void UpdatePageInfo() { if (_loader.PageCount == 0) { PageInfoText.Text = "0 / 0"; PrevPageButton.IsEnabled = false; NextPageButton.IsEnabled = false; return; } PageInfoText.Text = $"{_currentPageIndex + 1} / {_loader.PageCount}"; PrevPageButton.IsEnabled = _currentPageIndex > 0; NextPageButton.IsEnabled = _currentPageIndex < _loader.PageCount - 1; }
+    private void UpdatePageInfo()
+    {
+        if (_loader.PageCount == 0)
+        {
+            SetCurrentPageNumberText("0");
+            PageCountText.Text = "0";
+            PrevPageButton.IsEnabled = false;
+            NextPageButton.IsEnabled = false;
+            return;
+        }
+
+        SetCurrentPageNumberText((_currentPageIndex + 1).ToString());
+        PageCountText.Text = _loader.PageCount.ToString();
+        PrevPageButton.IsEnabled = _currentPageIndex > 0;
+        NextPageButton.IsEnabled = _currentPageIndex < _loader.PageCount - 1;
+    }
+
+    private void SetCurrentPageNumberText(string text)
+    {
+        _isUpdatingPageNumberText = true;
+        CurrentPageNumberText.Text = text;
+        _isUpdatingPageNumberText = false;
+    }
+
+    private void CurrentPageNumberText_OnTextChanged(object? sender, TextChangedEventArgs e)
+    {
+        if (_isUpdatingPageNumberText) return;
+
+        var text = CurrentPageNumberText.Text ?? string.Empty;
+        var digits = new string(text.Where(c => c is >= '0' and <= '9').ToArray());
+        if (digits == text) return;
+
+        SetCurrentPageNumberText(digits);
+        CurrentPageNumberText.CaretIndex = digits.Length;
+    }
+
+    private void CurrentPageNumberText_OnKeyDown(object? sender, KeyEventArgs e)
+    {
+        if (e.Key != Key.Enter) return;
+        e.Handled = true;
+        CommitCurrentPageNumber();
+    }
+
+    private void CurrentPageNumberText_OnLostFocus(object? sender, RoutedEventArgs e)
+    {
+        CommitCurrentPageNumber();
+    }
+
+    private void CommitCurrentPageNumber()
+    {
+        if (_loader.PageCount == 0)
+        {
+            UpdatePageInfo();
+            return;
+        }
+
+        if (!int.TryParse(CurrentPageNumberText.Text, out var pageNumber))
+        {
+            UpdatePageInfo();
+            return;
+        }
+
+        pageNumber = Math.Clamp(pageNumber, 1, _loader.PageCount);
+        _currentPageIndex = pageNumber - 1;
+        ScrollToPage(_currentPageIndex);
+        UpdatePageInfo();
+    }
     private void ScrollViewer_OnBackgroundClick(object? s, PointerPressedEventArgs e)
     {
         if (e.Source is FreeTextAnnotationControl or TextBox) return;
@@ -682,6 +800,8 @@ public partial class PdfViewer : UserControl, IDisposable
         _unloadCts = null;
         _virtualizeScrollTimer?.Stop();
         _virtualizeScrollTimer = null;
+        _pageNumberBarHideTimer?.Stop();
+        _pageNumberBarHideTimer = null;
         foreach (var slot in _pageSlots)
             UnmountPageContent(slot);
         PagesPanel.Children.Clear();
