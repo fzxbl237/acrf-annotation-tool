@@ -32,11 +32,16 @@ public partial class MainWindow : Window
 
     private void OnCancelShutdownClick(object? sender, RoutedEventArgs e)
     {
-        if (!_isShutdownConfirmationPending)
+        CloseShutdownConfirmation();
+    }
+
+    private void OnShutdownConfirmationClosed(object? sender, EventArgs e)
+    {
+        if (_allowClose || ShutdownExportDialog.IsOpen)
             return;
 
         _isShutdownConfirmationPending = false;
-        CloseShutdownConfirmation();
+        ShutdownExportDialog.IsModal = false;
     }
 
     private void OnCloseWithoutExportClick(object? sender, RoutedEventArgs e)

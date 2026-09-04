@@ -99,6 +99,20 @@
         </Border>
 
         <atom:Dialog
+            ButtonClicked="OnDeleteConfirmationDialogButtonClicked"
+            DefaultStandardButton="Ok"
+            HostMinWidth="320"
+            IsDragMovable="True"
+            IsModal="True"
+            StandardButtons="Cancel,Ok"
+            Title="确认删除"
+            x:Name="DeleteConfirmationDialog">
+            <StackPanel Spacing="8">
+                <TextBlock Text="确定要删除当前注释吗？" />
+            </StackPanel>
+        </atom:Dialog>
+
+        <atom:Dialog
             ButtonClicked="OnCoordinateDialogButtonClicked"
             DefaultStandardButton="Ok"
             HostMinWidth="320"

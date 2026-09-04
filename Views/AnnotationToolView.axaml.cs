@@ -26,6 +26,7 @@ public partial class AnnotationToolView : UserControl
     }
 
     private CoordinateOperation _pendingCoordinateOperation;
+    private Annotation? _pendingDeletion;
 
     public AnnotationToolView()
     {
@@ -82,7 +83,7 @@ public partial class AnnotationToolView : UserControl
         var adjustXItem = new AtomMenuItem { Header = "批量调整 X" };
         var adjustYItem = new AtomMenuItem { Header = "批量调整 Y" };
 
-        deleteItem.Click += (_, _) => viewModel.DeleteSelectedCommand.Execute(null);
+        deleteItem.Click += (_, _) => OpenDeleteConfirmationDialog(row, annotation);
         copyItem.Click += (_, _) => viewModel.CopySelectedCommand.Execute(null);
         uppercaseItem.Click += (_, _) => viewModel.UppercaseSelectedCommand.Execute(null);
         adjustXItem.Click += (_, _) => OpenCoordinateDialog(row, CoordinateOperation.AdjustX);
@@ -96,6 +97,28 @@ public partial class AnnotationToolView : UserControl
         menu.PlacementTarget = row;
         menu.Open(row);
         e.Handled = true;
+    }
+
+    private void OpenDeleteConfirmationDialog(PatChesDataGridRow row, Annotation annotation)
+    {
+        _pendingDeletion = annotation;
+        DeleteConfirmationDialog.PlacementTarget = row;
+        DeleteConfirmationDialog.IsOpen = true;
+    }
+
+    private void OnDeleteConfirmationDialogButtonClicked(object? sender, AtomDialogButtonClickedEventArgs e)
+    {
+        if (sender is not AtomDialog dialog || e.SourceButton.Role != AtomDialogButtonRole.AcceptRole)
+            return;
+
+        if (DataContext is AcrfDocumentViewModel viewModel && _pendingDeletion is { } annotation)
+        {
+            viewModel.SelectedItem = annotation;
+            viewModel.DeleteSelectedCommand.Execute(null);
+        }
+
+        _pendingDeletion = null;
+        dialog.IsOpen = false;
     }
 
     private void OpenCoordinateDialog(PatChesDataGridRow row, CoordinateOperation operation)

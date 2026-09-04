@@ -4,7 +4,6 @@ using System.Security;
 using System.Text.RegularExpressions;
 using Avalonia.Media;
 using PdfSharp.Drawing;
-using PdfSharp.Drawing.Layout;
 using PdfSharp.Fonts;
 using PdfSharp.Pdf;
 using PdfSharp.Pdf.Annotations;
@@ -234,13 +233,36 @@ public static class PdfAnnotationService
 
         var borderPen = new XPen(XColors.Black, 1);
         if (model.BorderStyle == AnnotationBorderStyle.Dashed)
-            borderPen.DashStyle = XDashStyle.Dash;
+        {
+            borderPen.DashStyle = XDashStyle.Custom;
+            borderPen.DashPattern = new[] { 3d, 3d };
+        }
         graphics.DrawRectangle(borderPen, x + 0.5, y + 0.5, Math.Max(0, width - 1), Math.Max(0, height - 1));
 
         var font = new XFont(
             ResolvePdfFontFamily(model),
             Math.Max(1, model.FontSize),
             GetEffectiveIsBold(model) ? XFontStyleEx.Bold : XFontStyleEx.Regular);
+        const double padding = 2;
+        var textRectangle = new XRect(
+            x + padding,
+            y + padding,
+            Math.Max(0, width - padding * 2),
+            Math.Max(0, height - padding * 2));
+        var text = model.Text ?? string.Empty;
+        var lines = WrapAnnotationText(graphics, text, font, textRectangle.Width);
+        if (lines.Count == 0)
+            return;
+
+        const double lineSpacingMultiplier = 1.2;
+        var lineHeight = Math.Max(1, model.FontSize) * lineSpacingMultiplier;
+        var contentHeight = lineHeight * lines.Count;
+        var firstLineY = model.VerticalTextAlignment switch
+        {
+            AnnotationVerticalTextAlignment.Center => textRectangle.Y + (textRectangle.Height - contentHeight) / 2,
+            AnnotationVerticalTextAlignment.Bottom => textRectangle.Bottom - contentHeight,
+            _ => textRectangle.Y
+        };
         var format = new XStringFormat
         {
             Alignment = model.HorizontalTextAlignment switch
@@ -249,37 +271,80 @@ public static class PdfAnnotationService
                 AnnotationHorizontalTextAlignment.Right => XStringAlignment.Far,
                 _ => XStringAlignment.Near
             },
-            LineAlignment = model.VerticalTextAlignment switch
-            {
-                AnnotationVerticalTextAlignment.Center => XLineAlignment.Center,
-                AnnotationVerticalTextAlignment.Bottom => XLineAlignment.Far,
-                _ => XLineAlignment.Near
-            }
+            LineAlignment = XLineAlignment.Near
         };
-        var padding = model.FontFamily.Equals("Arial Unicode MS", StringComparison.OrdinalIgnoreCase)
-            ? 1.5
-            : 3.0;
-        var textRectangle = new XRect(
-            x + padding,
-            y + padding,
-            Math.Max(0, width - padding * 2),
-            Math.Max(0, height - padding * 2));
-        var text = model.Text ?? string.Empty;
-        if (text.Contains('\n') || text.Contains('\r') || graphics.MeasureString(text, font).Width > textRectangle.Width)
+
+        var graphicsState = graphics.Save();
+        try
         {
-            var formatter = new XTextFormatter(graphics);
-            formatter.Alignment = model.HorizontalTextAlignment switch
+            graphics.IntersectClip(textRectangle);
+            for (var index = 0; index < lines.Count; index++)
+                graphics.DrawString(lines[index], font, textBrush, new XRect(
+                    textRectangle.X,
+                    firstLineY + index * lineHeight,
+                    textRectangle.Width,
+                    lineHeight), format);
+        }
+        finally
+        {
+            graphics.Restore(graphicsState);
+        }
+    }
+
+    private static List<string> WrapAnnotationText(
+        XGraphics graphics,
+        string text,
+        XFont font,
+        double maxWidth)
+    {
+        var lines = new List<string>();
+        if (string.IsNullOrEmpty(text))
+            return lines;
+
+        var normalizedText = text.Replace("\r\n", "\n").Replace('\r', '\n');
+        foreach (var paragraph in normalizedText.Split('\n'))
+        {
+            if (paragraph.Length == 0)
             {
-                AnnotationHorizontalTextAlignment.Center => XParagraphAlignment.Center,
-                AnnotationHorizontalTextAlignment.Right => XParagraphAlignment.Right,
-                _ => XParagraphAlignment.Left
-            };
-            formatter.DrawString(text, font, textBrush, textRectangle);
+                lines.Add(string.Empty);
+                continue;
+            }
+
+            var currentLine = string.Empty;
+            foreach (var word in paragraph.Split(' ', StringSplitOptions.RemoveEmptyEntries))
+            {
+                var candidate = currentLine.Length == 0 ? word : $"{currentLine} {word}";
+                if (graphics.MeasureString(candidate, font).Width <= maxWidth)
+                {
+                    currentLine = candidate;
+                    continue;
+                }
+
+                if (currentLine.Length > 0)
+                {
+                    lines.Add(currentLine);
+                    currentLine = string.Empty;
+                }
+
+                foreach (var character in word)
+                {
+                    candidate = $"{currentLine}{character}";
+                    if (currentLine.Length == 0 || graphics.MeasureString(candidate, font).Width <= maxWidth)
+                    {
+                        currentLine = candidate;
+                    }
+                    else
+                    {
+                        lines.Add(currentLine);
+                        currentLine = character.ToString();
+                    }
+                }
+            }
+
+            lines.Add(currentLine);
         }
-        else
-        {
-            graphics.DrawString(text, font, textBrush, textRectangle, format);
-        }
+
+        return lines;
     }
 
     private static string ResolveLoadedFontFamily(string fontResourceName)
@@ -421,7 +486,7 @@ public static class PdfAnnotationService
         if (style == AnnotationBorderStyle.Dashed)
         {
             bs.Elements.SetName("/S", "/D");
-            bs.Elements.SetObject("/D", new PdfArray(document, new PdfReal(2), new PdfReal(2)));
+            bs.Elements.SetObject("/D", new PdfArray(document, new PdfReal(3), new PdfReal(3)));
             annotation.Elements.SetString("/PdfViewerBorderStyle", "Dashed");
         }
         else

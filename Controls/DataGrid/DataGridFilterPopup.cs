@@ -139,7 +139,12 @@ public class DataGridFilterPopup : TemplatedControl
     private void DoSearch()
     {
         if (_filterList == null) return;
-        RenderMatchingItems(GetSearchText());
+
+        var searchText = GetSearchText();
+        foreach (var item in GetVisibleItems(searchText))
+            item.IsChecked = true;
+
+        RenderMatchingItems(searchText);
         SyncSelectAll();
     }
 
