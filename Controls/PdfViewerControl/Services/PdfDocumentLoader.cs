@@ -1,4 +1,5 @@
-﻿using System.IO;
+﻿using System.Buffers;
+using System.IO;
 using System.Runtime.InteropServices;
 using Avalonia;
 using Avalonia.Media.Imaging;
@@ -76,19 +77,25 @@ public sealed class PdfDocumentLoader : IDisposable
         }
     }
 
+    private const double MaxRenderLongEdgePixels = 3500;
+
     public WriteableBitmap? TryRenderPage(int pageIndex)
     {
         lock (_readerLock)
         {
             if (_pdfBytes == null || pageIndex < 0 || pageIndex >= PageCount) return null;
-            EnsureReaderMatchesScale();
+            var renderScale = GetRenderScale(pageIndex);
+            EnsureReaderMatchesScale(renderScale);
             if (_reader == null) return null;
+            byte[]? rented = null;
             try
             {
                 using var pageReader = _reader.GetPageReader(pageIndex);
                 var width = Math.Max(1, pageReader.GetPageWidth());
                 var height = Math.Max(1, pageReader.GetPageHeight());
-                var rawBytes = pageReader.GetImage();
+                var byteCount = checked(width * height * 4);
+                rented = ArrayPool<byte>.Shared.Rent(byteCount);
+                pageReader.WriteImageToBuffer((Docnet.Core.Models.RenderFlags)0, rented);
                 var bmp = new WriteableBitmap(new PixelSize(width, height), new Vector(96, 96));
                 using (var fb = bmp.Lock())
                 {
@@ -97,12 +104,17 @@ public sealed class PdfDocumentLoader : IDisposable
                     {
                         var srcOffset = y * srcStride;
                         var dstOffset = y * fb.RowBytes;
-                        Marshal.Copy(rawBytes, srcOffset, fb.Address + dstOffset, Math.Min(srcStride, fb.RowBytes));
+                        Marshal.Copy(rented, srcOffset, fb.Address + dstOffset, Math.Min(srcStride, fb.RowBytes));
                     }
                 }
                 return bmp;
             }
             catch (Docnet.Core.Exceptions.DocnetException) { return null; }
+            finally
+            {
+                if (rented is not null)
+                    ArrayPool<byte>.Shared.Return(rented);
+            }
         }
     }
 
@@ -131,10 +143,24 @@ public sealed class PdfDocumentLoader : IDisposable
         PageSizes = sizes;
     }
 
-    private void EnsureReaderMatchesScale()
+    private void EnsureReaderMatchesScale(double renderScale)
     {
-        if (Math.Abs(_readerScaleFactor - _scaleFactor) < 0.0001 && _reader != null) return;
-        OpenReaderAtCurrentScale();
+        if (Math.Abs(_readerScaleFactor - renderScale) < 0.0001 && _reader != null) return;
+        _reader?.Dispose();
+        _reader = _docLib.GetDocReader(_pdfBytes!, new Docnet.Core.Models.PageDimensions(renderScale));
+        _readerScaleFactor = renderScale;
+    }
+
+    private double GetRenderScale(int pageIndex)
+    {
+        var maxLongEdge = _pageSizesInPoints.Count > 0
+            ? Math.Max(_pageSizesInPoints[Math.Clamp(pageIndex, 0, _pageSizesInPoints.Count - 1)].Width,
+                _pageSizesInPoints[Math.Clamp(pageIndex, 0, _pageSizesInPoints.Count - 1)].Height)
+            : 612;
+        var scale = _scaleFactor;
+        if (maxLongEdge * scale > MaxRenderLongEdgePixels)
+            scale = MaxRenderLongEdgePixels / maxLongEdge;
+        return Math.Max(0.1, scale);
     }
 
     private void OpenReaderAtCurrentScale()

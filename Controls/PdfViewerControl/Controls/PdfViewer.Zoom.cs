@@ -49,7 +49,7 @@ public partial class PdfViewer
         _zoom = newZoom;
 
         InvalidateAllPageBitmaps(false);
-        BuildDocumentLayout(false);
+        ApplyZoomLayoutInPlace();
         RelayoutAllAnnotations();
         ReleaseFramesOutsideVisible();
 
@@ -66,6 +66,8 @@ public partial class PdfViewer
         }
         else
             ScrollToPage(_currentPageIndex);
+
+        RequestVirtualizationImmediate();
 
         SetStatus($"Page {_currentPageIndex + 1} / {_loader.PageCount} - {(int)Math.Round(newZoom * 100)}%");
     }
