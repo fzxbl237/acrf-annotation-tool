@@ -707,7 +707,11 @@ public partial class PdfViewer : UserControl, IDisposable
         return _loader.PageSizes.Count > i ? _loader.PageSizes[i].Height + 20 : 800;
     }
     private void ScrollToPage(int pi) { if (pi < 0 || pi >= PagesPanel.Children.Count) return; double y = 16; for (int i = 0; i < pi && i < _pageSlots.Count; i++) y += GetPageHostHeight(i); MainScrollViewer.Offset = new Vector(MainScrollViewer.Offset.X, Math.Max(0, y - 8)); }
-    private void UpdateZoomLabel() { if (ZoomLabel != null && ZoomSlider != null) ZoomLabel.Text = $"{(int)ZoomSlider.Value}%"; }
+    private void UpdateZoomLabel()
+    {
+        if (ZoomComboBox != null && ZoomSlider != null)
+            ZoomComboBox.Text = $"{(int)ZoomSlider.Value}%";
+    }
     private void UpdatePageInfo()
     {
         if (_loader.PageCount == 0)

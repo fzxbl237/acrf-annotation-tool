@@ -29,12 +29,28 @@
                     <Border Background="White" ClipToBounds="True">
                         <StackPanel Spacing="0">
 
-                            <atom:LineEdit
-                                FontSize="13"
-                                Margin="10,10,10,8"
-                                MinHeight="32"
-                                PlaceholderText="搜索..."
-                                x:Name="PART_SearchBox" />
+                            <Grid Margin="10,10,10,8" ColumnDefinitions="*,112" ColumnSpacing="6">
+                                <atom:LineEdit
+                                    Grid.Column="0"
+                                    FontSize="13"
+                                    MinHeight="32"
+                                    PlaceholderText="输入筛选内容..."
+                                    x:Name="PART_SearchBox" />
+                                <atom:ComboBox
+                                    Grid.Column="1"
+                                    FontSize="12"
+                                    Height="32"
+                                    SelectedIndex="0"
+                                    VerticalContentAlignment="Center"
+                                    x:Name="PART_MatchModeBox">
+                                    <atom:ComboBoxItem Content="包含" />
+                                    <atom:ComboBoxItem Content="开头是" />
+                                    <atom:ComboBoxItem Content="结尾是" />
+                                    <atom:ComboBoxItem Content="不包含" />
+                                    <atom:ComboBoxItem Content="开头不是" />
+                                    <atom:ComboBoxItem Content="结尾不是" />
+                                </atom:ComboBox>
+                            </Grid>
 
                             <StackPanel
                                 Margin="12,0,12,8"

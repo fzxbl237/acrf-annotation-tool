@@ -10,12 +10,31 @@
             <RowDefinition Height="*" />
             <RowDefinition Height="Auto" />
         </Grid.RowDefinitions>
-        <Border Grid.Row="0" Background="White" BorderBrush="#FFE5E7EB" BorderThickness="0,0,0,1" Padding="8,6">
-            <WrapPanel VerticalAlignment="Center">
-                <TextBlock Text="缩放：" VerticalAlignment="Center" Margin="0,0,4,0" />
-                <Slider x:Name="ZoomSlider" Width="160" Minimum="25" Maximum="400" Value="100" ValueChanged="ZoomSlider_OnValueChanged" />
-                <TextBlock x:Name="ZoomLabel" VerticalAlignment="Center" Margin="4,0,0,0" Text="100%" />
-            </WrapPanel>
+        <Border Grid.Row="0" Background="#FFF1F3F5" BorderBrush="#FFD5DAE0" BorderThickness="0,0,0,1" Padding="12,8">
+            <StackPanel VerticalAlignment="Center">
+                <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" VerticalAlignment="Center">
+                    <atom:ComboBox x:Name="ZoomComboBox" Width="112" Height="34" Padding="10,0" VerticalContentAlignment="Center" HorizontalContentAlignment="Center" IsEditable="True" SelectedIndex="2" FontSize="14" FontWeight="SemiBold" Foreground="#FF1F2937" Background="#FFF8FAFC" BorderBrush="#FFE6E9ED" BorderThickness="1" CornerRadius="7" SelectionChanged="ZoomComboBox_OnSelectionChanged" KeyDown="ZoomComboBox_OnKeyDown" LostFocus="ZoomComboBox_OnLostFocus">
+                        <atom:ComboBoxItem Content="50%" />
+                        <atom:ComboBoxItem Content="75%" />
+                        <atom:ComboBoxItem Content="100%" />
+                        <atom:ComboBoxItem Content="125%" />
+                        <atom:ComboBoxItem Content="150%" />
+                        <atom:ComboBoxItem Content="200%" />
+                        <atom:ComboBoxItem Content="300%" />
+                        <atom:ComboBoxItem Content="400%" />
+                    </atom:ComboBox>
+                    <Border Width="1" Height="24" Background="#FFD2D8DE" Margin="12,0" VerticalAlignment="Center" />
+                    <StackPanel Orientation="Horizontal" Spacing="10" VerticalAlignment="Center">
+                        <Border Width="30" Height="30" CornerRadius="15" BorderBrush="#FF89939D" BorderThickness="2" Background="#FFF8FAFC">
+                            <atom:IconButton x:Name="ZoomOutButton" Icon="{antd-icons:AntDesignIconProvider Kind=MinusOutlined}" IconWidth="16" IconHeight="16" Width="26" Height="26" MinWidth="0" Padding="0" Background="Transparent" Foreground="#FF7C8794" Click="ZoomOutButton_OnClick" />
+                        </Border>
+                        <Border Width="30" Height="30" CornerRadius="15" BorderBrush="#FF89939D" BorderThickness="2" Background="#FFF8FAFC">
+                            <atom:IconButton x:Name="ZoomInButton" Icon="{antd-icons:AntDesignIconProvider Kind=PlusOutlined}" IconWidth="16" IconHeight="16" Width="26" Height="26" MinWidth="0" Padding="0" Background="Transparent" Foreground="#FF7C8794" Click="ZoomInButton_OnClick" />
+                        </Border>
+                    </StackPanel>
+                </StackPanel>
+                <Slider x:Name="ZoomSlider" Width="1" Height="1" Opacity="0" IsHitTestVisible="False" Minimum="25" Maximum="400" Value="100" ValueChanged="ZoomSlider_OnValueChanged" />
+            </StackPanel>
         </Border>
         <ScrollViewer x:Name="MainScrollViewer" Grid.Row="1" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" ScrollChanged="MainScrollViewer_OnScrollChanged" PointerPressed="ScrollViewer_OnBackgroundClick">
             <StackPanel x:Name="PagesPanel" HorizontalAlignment="Center" Margin="16" />

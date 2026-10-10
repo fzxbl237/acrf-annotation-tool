@@ -71,8 +71,14 @@ public partial class FreeTextAnnotationControl : UserControl
         MinWidth = Math.Max(2, Math.Min(w, 12 * displayScale)); MinHeight = Math.Max(2, Math.Min(h, 8 * displayScale));
         Width = w; Height = h;
         var isArialUnicodeMs = Model.FontFamily.Equals("Arial Unicode MS", StringComparison.OrdinalIgnoreCase);
-        var horizontalPadding = Math.Max(1, 3 * displayScale);
-        var verticalPadding = Math.Max(0.5, (isArialUnicodeMs ? 0.5 : 2) * displayScale);
+        // PdfAnnotationService draws the exported text inside a rectangle inset by 2pt on every side and
+        // strokes the 1pt border within that same inset, so the viewer has to leave the text the same
+        // room: border + padding = 2pt. With a 2pt padding the viewer gave the text only width - 6pt and
+        // height - 6pt, so text the export keeps on one line wrapped here, and in a single-line box the
+        // missing 2pt of vertical room clipped the descender of letters like "g" at the bottom.
+        var borderDip = PdfCoordinateConverter.PointsToPixels(DefaultBorderWidthPoints, _displayScale);
+        var horizontalPadding = Math.Max(0, 2 * displayScale - borderDip);
+        var verticalPadding = isArialUnicodeMs ? Math.Max(0.5, 0.5 * displayScale) : Math.Max(0, 2 * displayScale - borderDip);
         var baselineCompensation = isArialUnicodeMs ? 0.5 * displayScale : 0;
         Chrome.Padding = new Thickness(
             horizontalPadding,

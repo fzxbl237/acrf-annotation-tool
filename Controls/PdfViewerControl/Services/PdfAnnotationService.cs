@@ -356,24 +356,19 @@ public static class PdfAnnotationService
             : "Arial";
     }
 
-    private static string ResolvePdfFontFamily(FreeTextAnnotationModel model)
-    {
-        if (model.FontFamily.Equals("Arial Unicode MS", StringComparison.OrdinalIgnoreCase))
-            return "Arial Unicode MS";
+    private static bool NeedsUnicodeFont(string? text) =>
+        !string.IsNullOrEmpty(text) && text.Any(static c => c > 127);
 
-        return "Arial";
-    }
+    private static string ResolvePdfFontFamily(FreeTextAnnotationModel model) =>
+        NeedsUnicodeFont(model.Text) ? "Arial Unicode MS" : "Arial";
 
     private static bool GetEffectiveIsBold(FreeTextAnnotationModel model) =>
-        !model.FontFamily.Equals("Arial Unicode MS", StringComparison.OrdinalIgnoreCase) && model.IsBold;
+        !NeedsUnicodeFont(model.Text) && model.IsBold;
 
-    private static string GetFontResourceName(FreeTextAnnotationModel model)
-    {
-        if (model.FontFamily.Equals("Arial Unicode MS", StringComparison.OrdinalIgnoreCase))
-            return "/ArialUnicode";
-
-        return GetEffectiveIsBold(model) ? "/ArialBold" : "/Arial";
-    }
+    private static string GetFontResourceName(FreeTextAnnotationModel model) =>
+        NeedsUnicodeFont(model.Text)
+            ? "/ArialUnicode"
+            : GetEffectiveIsBold(model) ? "/ArialBold" : "/Arial";
 
     private static PdfDictionary CreateAnnotationFontResources(
         PdfDocument document,

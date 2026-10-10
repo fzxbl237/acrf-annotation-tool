@@ -1,7 +1,11 @@
-﻿using Avalonia;
+using Avalonia;
+using Avalonia.Controls;
 using Avalonia.Controls.Primitives;
 using Avalonia.Input;
+using Avalonia.Threading;
 using PdfViewerControl.Helpers;
+using ComboBox = AtomUI.Desktop.Controls.ComboBox;
+using ComboBoxItem = AtomUI.Desktop.Controls.ComboBoxItem;
 
 namespace PdfViewerControl.Controls;
 
@@ -13,6 +17,53 @@ public partial class PdfViewer
 
     private void ZoomIn() => ApplyZoomLevel(_zoom * ZoomFactor);
     private void ZoomOut() => ApplyZoomLevel(_zoom / ZoomFactor);
+
+    private void ZoomOutButton_OnClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+    {
+        ZoomOut();
+    }
+
+    private void ZoomInButton_OnClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+    {
+        ZoomIn();
+    }
+
+    private void ZoomComboBox_OnSelectionChanged(object? sender, SelectionChangedEventArgs e)
+    {
+        if (sender is ComboBox comboBox && comboBox.SelectedItem is ComboBoxItem item)
+            CommitZoomText(item.Content?.ToString());
+    }
+
+    private void ZoomComboBox_OnKeyDown(object? sender, KeyEventArgs e)
+    {
+        if (e.Key != Key.Enter || sender is not ComboBox comboBox) return;
+        e.Handled = true;
+        CommitZoomText(comboBox.Text);
+    }
+
+    private void ZoomComboBox_OnLostFocus(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+    {
+        if (sender is ComboBox comboBox)
+            CommitZoomText(comboBox.Text);
+    }
+
+    private void CommitZoomText(string? text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            UpdateZoomLabel();
+            return;
+        }
+
+        var normalized = text.Trim().TrimEnd('%');
+        if (!double.TryParse(normalized, out var percent))
+        {
+            UpdateZoomLabel();
+            return;
+        }
+
+        ApplyZoomLevel(Math.Clamp(percent / 100.0, ZoomMin, ZoomMax));
+    }
 
     private void ZoomSlider_OnValueChanged(object? sender, RangeBaseValueChangedEventArgs e)
     {
@@ -37,8 +88,8 @@ public partial class PdfViewer
 
         ++_renderGeneration;
         var gen = _renderGeneration;
-        var anchor = _currentPageIndex;
-        var ratio = MainScrollViewer.Extent.Height > 1 ? MainScrollViewer.Offset.Y / MainScrollViewer.Extent.Height : 0.0;
+        var anchor = Math.Clamp(_currentPageIndex, 0, Math.Max(0, _pageSlots.Count - 1));
+        var anchorScrollOffset = MainScrollViewer.Offset.Y - GetPageHostTop(anchor);
 
         _suppressSliderZoomSchedule = true;
         ZoomSlider.Value = Math.Round(newZoom * 100);
@@ -53,23 +104,50 @@ public partial class PdfViewer
         RelayoutAllAnnotations();
         ReleaseFramesOutsideVisible();
 
-        _currentPageIndex = Math.Clamp(anchor, 0, Math.Max(0, _pageSlots.Count - 1));
+        _currentPageIndex = anchor;
         UpdatePageInfo();
 
         PagesPanel.InvalidateArrange();
         MainScrollViewer.InvalidateArrange();
-        var ext = MainScrollViewer.Extent.Height;
-        if (ext > 1)
-        {
-            var off = Math.Clamp(ratio * ext, 0, ext - MainScrollViewer.Bounds.Height);
-            MainScrollViewer.Offset = new Vector(MainScrollViewer.Offset.X, Math.Max(0, off));
-        }
-        else
-            ScrollToPage(_currentPageIndex);
+
+        // ScrollViewer.Extent still holds the pre-zoom value here: it is recomputed during the next
+        // layout pass. Restoring the previous ratio (offset / extent) would therefore keep the very
+        // same offset while every page grew or shrank, which lands on a different page. Anchor on the
+        // current page instead and apply the target offset once the new layout has been arranged.
+        _suspendScrollPageTracking++;
+        Dispatcher.UIThread.Post(() => RestoreScrollAfterZoom(anchor, anchorScrollOffset), DispatcherPriority.Loaded);
 
         RequestVirtualizationImmediate();
 
         SetStatus($"Page {_currentPageIndex + 1} / {_loader.PageCount} - {(int)Math.Round(newZoom * 100)}%");
+    }
+
+    private void RestoreScrollAfterZoom(int anchor, double anchorScrollOffset)
+    {
+        try
+        {
+            var extent = MainScrollViewer.Extent.Height;
+            var viewport = MainScrollViewer.Bounds.Height;
+            var target = Math.Clamp(GetPageHostTop(anchor) + anchorScrollOffset, 0, Math.Max(0, extent - viewport));
+            MainScrollViewer.Offset = new Vector(MainScrollViewer.Offset.X, target);
+            UpdateCurrentPageIndexFromViewport();
+            SetStatus($"Page {_currentPageIndex + 1} / {_loader.PageCount} - {(int)Math.Round(_zoom * 100)}%");
+        }
+        finally
+        {
+            _suspendScrollPageTracking = Math.Max(0, _suspendScrollPageTracking - 1);
+        }
+    }
+
+    /// <summary>Top of the given page in scroll coordinates, derived from the page sizes instead of
+    /// <see cref="Control.Bounds"/>, which is not up to date before the layout pass has run.</summary>
+    private double GetPageHostTop(int pageIndex)
+    {
+        var top = 0.0;
+        var count = Math.Min(pageIndex, _pageSlots.Count);
+        for (var i = 0; i < count; i++)
+            top += _loader.PageSizes.Count > i ? _loader.PageSizes[i].Height + 6 : 800;
+        return top;
     }
 
     private void InvalidateAllPageBitmaps(bool keepVisible = false)

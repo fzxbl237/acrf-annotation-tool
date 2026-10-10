@@ -10,13 +10,16 @@ using AtomButton = AtomUI.Desktop.Controls.Button;
 using AtomCheckBox = AtomUI.Desktop.Controls.CheckBox;
 using AtomLineEdit = AtomUI.Desktop.Controls.LineEdit;
 using AtomListBox = AtomUI.Desktop.Controls.ListBox;
+using AtomComboBox = AtomUI.Desktop.Controls.ComboBox;
 
 namespace PatChes.Controls.DataGrid;
 
 public class DataGridFilterPopup : TemplatedControl
 {
     private AtomLineEdit? _searchBox;
+    private AtomComboBox? _matchModeBox;
     private AtomListBox? _filterList;
+    private FilterMatchMode _matchMode = FilterMatchMode.Contains;
     private AtomCheckBox? _selectAllCheckBox;
     private readonly List<DataGridFilterItem> _items = new();
 
@@ -56,7 +59,13 @@ public class DataGridFilterPopup : TemplatedControl
     {
         base.OnApplyTemplate(e);
         _searchBox = e.NameScope.Find<AtomLineEdit>("PART_SearchBox");
+        _matchModeBox = e.NameScope.Find<AtomComboBox>("PART_MatchModeBox");
         _filterList = e.NameScope.Find<AtomListBox>("PART_FilterList");
+        if (_matchModeBox != null)
+        {
+            _matchModeBox.SelectedIndex = (int)_matchMode;
+            _matchModeBox.SelectionChanged += OnMatchModeChanged;
+        }
         _selectAllCheckBox = e.NameScope.Find<AtomCheckBox>("PART_SelectAllCheckBox");
         if (_searchBox != null) _searchBox.TextChanged += (_, _) => DoSearch();
         if (_filterList != null)
@@ -136,6 +145,13 @@ public class DataGridFilterPopup : TemplatedControl
             _selectAllCheckBox.IsChecked = allChecked ? true : noneChecked ? false : null;
     }
 
+    private void OnMatchModeChanged(object? sender, SelectionChangedEventArgs e)
+    {
+        if (sender is not AtomComboBox comboBox || comboBox.SelectedIndex < 0) return;
+        _matchMode = (FilterMatchMode)comboBox.SelectedIndex;
+        DoSearch();
+    }
+
     private void DoSearch()
     {
         if (_filterList == null) return;
@@ -155,7 +171,21 @@ public class DataGridFilterPopup : TemplatedControl
         searchText ??= GetSearchText();
         if (string.IsNullOrEmpty(searchText)) return _items;
 
-        return _items.Where(item => item.Value.Contains(searchText, StringComparison.OrdinalIgnoreCase));
+        return _items.Where(item => Matches(item.Value, searchText));
+    }
+
+    private bool Matches(string value, string searchText)
+    {
+        var comparison = StringComparison.OrdinalIgnoreCase;
+        return _matchMode switch
+        {
+            FilterMatchMode.StartsWith => value.StartsWith(searchText, comparison),
+            FilterMatchMode.EndsWith => value.EndsWith(searchText, comparison),
+            FilterMatchMode.NotStartsWith => !value.StartsWith(searchText, comparison),
+            FilterMatchMode.NotEndsWith => !value.EndsWith(searchText, comparison),
+            FilterMatchMode.NotContains => !value.Contains(searchText, comparison),
+            _ => value.Contains(searchText, comparison),
+        };
     }
 
     private void RenderMatchingItems(string text)
@@ -176,6 +206,16 @@ public class DataGridFilterPopup : TemplatedControl
         RenderMatchingItems(text);
     }
 
+}
+
+internal enum FilterMatchMode
+{
+    Contains,
+    StartsWith,
+    EndsWith,
+    NotContains,
+    NotStartsWith,
+    NotEndsWith,
 }
 
 internal sealed class DataGridFilterItem : INotifyPropertyChanged
