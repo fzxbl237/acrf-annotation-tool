@@ -90,6 +90,7 @@
                                 </Document.Content>
                             </Document>
                         </DocumentDock>
+                        <dockmodel:ProportionalDockSplitter CanResize="True" />
                         <DocumentDock CloseButtonShowMode="Never">
                             <Document
                                 CanClose="False"
