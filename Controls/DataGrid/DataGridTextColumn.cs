@@ -42,8 +42,7 @@ public class DataGridTextColumn : DataGridBoundColumn
         if (Foreground != null) tb.Foreground = Foreground;
         if (Binding != null && dataItem != null)
         {
-            var b = CloneBinding(Binding);
-            if (b is Binding binding) binding.Mode = BindingMode.OneWay;
+            var b = CloneBinding(Binding, BindingMode.OneWay);
             tb.Bind(TextBlock.TextProperty, b);
             if (ShowToolTip) ToolTip.SetTip(tb, CreateTextToolTip(b));
         }
@@ -89,7 +88,7 @@ public class DataGridTextColumn : DataGridBoundColumn
 
         if (!string.IsNullOrWhiteSpace(BindingPath))
         {
-            var property = dataItem.GetType().GetProperty(BindingPath);
+            var property = DataGridBoundColumn.GetItemProperty(dataItem, BindingPath);
             lineEdit.Text = property?.GetValue(dataItem)?.ToString() ?? string.Empty;
         }
 

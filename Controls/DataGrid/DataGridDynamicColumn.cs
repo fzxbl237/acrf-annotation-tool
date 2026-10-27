@@ -34,9 +34,7 @@ public class DataGridDynamicColumn : DataGridBoundColumn
 
         if (Binding != null && dataItem != null)
         {
-            var binding = CloneBinding(Binding);
-            if (binding is Binding dataBinding)
-                dataBinding.Mode = BindingMode.OneWay;
+            var binding = CloneBinding(Binding, BindingMode.OneWay);
             textBlock.Bind(TextBlock.TextProperty, binding);
         }
         else if (dataItem != null)
@@ -164,7 +162,7 @@ public class DataGridDynamicColumn : DataGridBoundColumn
         if (string.IsNullOrWhiteSpace(BindingPath))
             return null;
 
-        return dataItem.GetType().GetProperty(BindingPath)?.GetValue(dataItem);
+        return DataGridBoundColumn.GetItemProperty(dataItem, BindingPath)?.GetValue(dataItem);
     }
 
     private void ConfigureEditor(Control editor)

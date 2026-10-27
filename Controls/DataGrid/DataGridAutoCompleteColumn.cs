@@ -62,8 +62,7 @@ public class DataGridAutoCompleteColumn : DataGridBoundColumn
 
         if (Binding != null && dataItem != null)
         {
-            var binding = CloneBinding(Binding);
-            if (binding is Binding dataBinding) dataBinding.Mode = BindingMode.OneWay;
+            var binding = CloneBinding(Binding, BindingMode.OneWay);
             textBlock.Bind(TextBlock.TextProperty, binding);
         }
         else if (dataItem != null)
@@ -109,8 +108,7 @@ public class DataGridAutoCompleteColumn : DataGridBoundColumn
         if (element is not AtomAutoComplete autoComplete || Binding == null || dataItem == null)
             return element;
 
-        var binding = CloneBinding(Binding);
-        if (binding is Binding valueBinding) valueBinding.Mode = BindingMode.OneWay;
+        var binding = CloneBinding(Binding, BindingMode.OneWay);
         autoComplete.Bind(AbstractAutoComplete.ValueProperty, binding);
         return autoComplete;
     }

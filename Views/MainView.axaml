@@ -3,6 +3,7 @@
     x:CompileBindings="True"
     x:DataType="vm:MainWindowViewModel"
     xmlns="https://github.com/avaloniaui"
+    xmlns:views="using:AcrfAnnotationTool.Views"
     xmlns:vm="using:AcrfAnnotationTool.ViewModels"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
     <Grid Background="#FFF3F4F6" RowDefinitions="Auto,*,Auto">
@@ -20,7 +21,7 @@
                     VerticalAlignment="Center" />
                 <TextBlock
                     Foreground="#FF64748B"
-                    Text="v0.44"
+                    Text="v0.45"
                     VerticalAlignment="Center" />
                 <TextBlock
                     Foreground="#FF64748B"
@@ -29,12 +30,9 @@
                     VerticalAlignment="Center" />
             </StackPanel>
         </Border>
-        <DockControl
-            Factory="{Binding Factory}"
+        <views:AcrfEditorView
+            DataContext="{Binding Editor}"
             Grid.Row="1"
-            InitializeFactory="True"
-            InitializeLayout="True"
-            Layout="{Binding Layout}"
             Margin="8" />
         <Border
             Background="White"

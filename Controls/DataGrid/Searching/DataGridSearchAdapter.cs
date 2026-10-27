@@ -103,18 +103,25 @@ public class DataGridSearchAdapter : IDisposable
 
     private static string? GetBindingPath(DataGridBoundColumn col) => col.BindingPath;
 
-    private static readonly System.Collections.Concurrent.ConcurrentDictionary<(Type Type, string Path), PropertyInfo?> _propertyCache = new();
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<(Type Type, string Path), DataGridBoundColumn.ItemProperty?> _propertyCache = new();
 
     private static string? GetText(ColInfo col, object item)
     {
         if (col.BindingPath == null) return null;
-        var parts = col.BindingPath.Split('.');
+        var parts = col.BindingParts!;
         object? current = item;
         foreach (var part in parts)
         {
             if (current == null) return null;
-            var prop = _propertyCache.GetOrAdd((current.GetType(), part), key =>
-                key.Type.GetProperty(key.Path, BindingFlags.Public | BindingFlags.Instance | BindingFlags.IgnoreCase));
+            if (DataGridBoundColumn.TryGetAnnotationValue(current, part, ignoreCase: true, out var value))
+            {
+                current = value;
+                continue;
+            }
+
+            var prop = _propertyCache.GetOrAdd((current.GetType(), part), _ =>
+                DataGridBoundColumn.GetItemProperty(current, part,
+                    BindingFlags.Public | BindingFlags.Instance | BindingFlags.IgnoreCase));
             if (prop == null) return null;
             current = prop.GetValue(current);
         }
@@ -124,9 +131,9 @@ public class DataGridSearchAdapter : IDisposable
     private sealed class ColInfo
     {
         public DataGridColumn Column; public string Name; public int Index;
-        public string? BindingPath; public Func<object, string?>? TextProvider;
+        public string? BindingPath; public string[]? BindingParts; public Func<object, string?>? TextProvider;
         public ColInfo(DataGridColumn c, string n, int i, string? bp, Func<object, string?>? tp)
-        { Column = c; Name = n; Index = i; BindingPath = bp; TextProvider = tp; }
+        { Column = c; Name = n; Index = i; BindingPath = bp; BindingParts = bp?.Split('.'); TextProvider = tp; }
     }
 }
 

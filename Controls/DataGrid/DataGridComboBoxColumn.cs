@@ -74,14 +74,12 @@ public class DataGridComboBoxColumn : DataGridBoundColumn
 
         if (Binding != null && dataItem != null)
         {
-            var binding = CloneBinding(Binding);
-            if (binding is Binding dataBinding)
-                dataBinding.Mode = BindingMode.OneWay;
+            var binding = CloneBinding(Binding, BindingMode.OneWay);
             textBlock.Bind(TextBlock.TextProperty, binding);
         }
         else if (dataItem != null && !string.IsNullOrWhiteSpace(BindingPath))
         {
-            var property = dataItem.GetType().GetProperty(BindingPath);
+            var property = DataGridBoundColumn.GetItemProperty(dataItem, BindingPath);
             textBlock.Text = property?.GetValue(dataItem)?.ToString();
         }
         else if (dataItem != null)
@@ -100,15 +98,13 @@ public class DataGridComboBoxColumn : DataGridBoundColumn
 
         if (!string.IsNullOrWhiteSpace(BindingPath))
         {
-            var property = dataItem.GetType().GetProperty(BindingPath);
+            var property = DataGridBoundColumn.GetItemProperty(dataItem, BindingPath);
             comboBox.SelectedItem = property?.GetValue(dataItem);
         }
 
         if (Binding != null)
         {
-            var binding = CloneBinding(Binding);
-            if (binding is Binding dataBinding)
-                dataBinding.Mode = BindingMode.OneWay;
+            var binding = CloneBinding(Binding, BindingMode.OneWay);
             comboBox.Bind(ComboBox.SelectedItemProperty, binding);
         }
 

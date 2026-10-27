@@ -6,11 +6,7 @@ using AcrfAnnotationTool.Services.Interface;
 using AcrfAnnotationTool.ViewModels;
 using AcrfAnnotationTool.Views;
 using Microsoft.Extensions.DependencyInjection;
-using SqlSugar;
-using AtomUI;
-using AtomUI.Desktop.Controls;
-using AtomUI.Localization;
-using AtomUI.Theme;
+using Microsoft.Data.Sqlite;
 
 namespace AcrfAnnotationTool;
 
@@ -21,13 +17,6 @@ public partial class App : Application
     public override void Initialize()
     {
         AvaloniaXamlLoader.Load(this);
-        this.UseAtomUI(builder =>
-        {
-            builder.UseLanguages(LanguageTags.ZhCN, [LanguageTags.En,LanguageTags.ZhCN]);
-            builder.WithInitialTheme(IThemeManager.DEFAULT_THEME_ID);
-            builder.UseAlibabaSansFont();
-            builder.UseDesktopControls();
-        });
     }
 
     public override void OnFrameworkInitializationCompleted()
@@ -35,16 +24,14 @@ public partial class App : Application
         if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
         {
             var services = new ServiceCollection();
-            services.AddSingleton<ISqlSugarClient>(_ =>
+            services.AddSingleton<Func<SqliteConnection>>(_ => () =>
             {
                 var databasePath = Path.Combine(AppContext.BaseDirectory, "cdisc_setting.db");
-                return new SqlSugarScope(new ConnectionConfig
+                var connectionString = new SqliteConnectionStringBuilder
                 {
-                    ConfigId = "setting",
-                    DbType = DbType.Sqlite,
-                    ConnectionString = $"DataSource={databasePath}",
-                    IsAutoCloseConnection = true
-                });
+                    DataSource = databasePath
+                }.ToString();
+                return new SqliteConnection(connectionString);
             });
             services.AddSingleton<IDatabaseService, DatabaseService>();
             services.AddSingleton<CdiscDatasetCatalog>();

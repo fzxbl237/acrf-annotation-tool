@@ -1,15 +1,11 @@
 ﻿using Avalonia.Controls;
 using Avalonia.Platform.Storage;
-using iText.IO.Font;
-using iText.Kernel.Font;
+using Avalonia.Threading;
 using System.Collections.ObjectModel;
 using System.ComponentModel;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
-using Dock.Model.Controls;
-using Dock.Model.Mvvm.Controls;
 using DynamicData;
-using MiniExcelLibs;
 using AcrfAnnotationTool.Models;
 using AcrfAnnotationTool.Services;
 using AcrfAnnotationTool.Services.Interface;
@@ -27,7 +23,7 @@ public enum SpecExportOutcome
     Failed
 }
 
-public partial class AcrfDocumentViewModel : Document
+public partial class AcrfDocumentViewModel : ObservableObject
 {
     private static readonly string[] DomainColors =
     [
@@ -37,10 +33,12 @@ public partial class AcrfDocumentViewModel : Document
         "#FFFFBE9B"
     ];
 
-    private static readonly PdfFont AnnotationMeasurementFont = CreateAnnotationMeasurementFont();
-    private static readonly PdfFont DomainAnnotationMeasurementFont = CreateDomainAnnotationMeasurementFont();
-    private static readonly PdfFont ChineseAnnotationMeasurementFont = CreateChineseAnnotationMeasurementFont();
-    private static readonly PdfFont ChineseDomainAnnotationMeasurementFont = CreateChineseDomainAnnotationMeasurementFont();
+    private static readonly Lazy<TrueTypeFontMetrics> AnnotationMeasurementFont =
+        new(() => CreateMeasurementFont("ARIAL.TTF"));
+    private static readonly Lazy<TrueTypeFontMetrics> DomainAnnotationMeasurementFont =
+        new(() => CreateMeasurementFont("ARIALBD.TTF"));
+    private static readonly Lazy<TrueTypeFontMetrics> ChineseAnnotationMeasurementFont =
+        new(() => CreateMeasurementFont("ARIALUNI.TTF"));
     private const float AnnotationFontSize = 12;
     private const double AnnotationHorizontalPadding = 10;
     private const double AnnotationLineHeight = AnnotationFontSize * 1.2;
@@ -57,6 +55,7 @@ public partial class AcrfDocumentViewModel : Document
     private string? _pdfPath;
     private PdfViewer? _viewer;
     private DataGrid? _annotationGrid;
+    private Annotation? _selectedAnnotationRow;
     private Window? _window;
     private readonly HashSet<Annotation> _observedAnnotations = new();
     private readonly Dictionary<Annotation, long> _annotationTextSyncVersions = new();
@@ -65,9 +64,10 @@ public partial class AcrfDocumentViewModel : Document
     private readonly TemplateVariableDomainCatalog _variableDomainCatalog;
     private readonly IMessageService _messageService;
     private bool _synchronizing;
+    private bool _selectingPdfAnnotation;
+    private bool _hasImportedSpec;
 
     public MainWindowViewModel? AppOwner { get; init; }
-    public DockFactory? PanelFactory => AppOwner?.Factory;
     public ReadOnlyObservableCollection<Annotation> Annotations => _annotations;
     public SuggestionOptionsAsyncLoader SuggestionOptionsAsyncLoader { get; }
     public string Status { get => _status; private set => SetProperty(ref _status, value); }
@@ -165,9 +165,11 @@ public partial class AcrfDocumentViewModel : Document
     }
 
     [RelayCommand]
-    private async Task OpenPdfAsync()
+    private async Task OpenPdfAsync() => await OpenPdfWithResultAsync();
+
+    public async Task<bool> OpenPdfWithResultAsync()
     {
-        if (_window is null) return;
+        if (_window is null) return false;
         var files = await _window.StorageProvider.OpenFilePickerAsync(new FilePickerOpenOptions
         {
             Title = "选择 aCRF PDF",
@@ -175,51 +177,77 @@ public partial class AcrfDocumentViewModel : Document
             FileTypeFilter = [new FilePickerFileType("PDF 文件") { Patterns = ["*.pdf"] }]
         });
         var file = files.FirstOrDefault();
-        if (file is null) return;
+        if (file is null) return false;
         var path = file.TryGetLocalPath();
-        if (string.IsNullOrWhiteSpace(path)) return;
+        if (string.IsNullOrWhiteSpace(path)) return false;
         PdfPath = path;
-        if (_viewer is null) return;
+        if (_viewer is null) return false;
+        _annotationGrid?.CancelEdit();
+        _annotationGrid?.ClearHistory();
         _viewer.LoadDocument(path);
         Status = $"已打开：{Path.GetFileName(path)}";
         _messageService.Success(Status);
+        return true;
     }
 
-    [RelayCommand]
-    private async Task ImportAsync()
+    [RelayCommand(IncludeCancelCommand = true)]
+    private async Task ImportAsync(CancellationToken cancellationToken) => await ImportWithResultAsync(cancellationToken);
+
+    public async Task<bool> ImportWithResultAsync(CancellationToken cancellationToken = default)
     {
-        if (_window is null) return;
-        var files = await _window.StorageProvider.OpenFilePickerAsync(new FilePickerOpenOptions
+        if (_window is null) return false;
+        try
         {
-            Title = "导入注释 Spec",
-            AllowMultiple = false,
-            FileTypeFilter = [new FilePickerFileType("Excel 文件") { Patterns = ["*.xlsx"] }]
-        });
-        var path = files.FirstOrDefault()?.TryGetLocalPath();
-        if (string.IsNullOrWhiteSpace(path)) return;
-        var rows = await Task.Run(() => MiniExcel.Query<Annotation>(path, hasHeader: false).ToList());
-        foreach (var row in rows)
-            row.AnnotationUniqueId = Guid.NewGuid().ToString();
-        UnobserveAllAnnotations();
-        _source.Edit(updater =>
-        {
-            updater.Clear();
-            updater.AddRange(rows);
-        });
-        foreach (var row in rows)
-            ObserveAnnotation(row);
+            var files = await _window.StorageProvider.OpenFilePickerAsync(new FilePickerOpenOptions
+            {
+                Title = "导入注释 Spec",
+                AllowMultiple = false,
+                FileTypeFilter = [new FilePickerFileType("Excel 文件") { Patterns = ["*.xlsx"] }]
+            });
+            var path = files.FirstOrDefault()?.TryGetLocalPath();
+            if (string.IsNullOrWhiteSpace(path)) return false;
+            var rows = await Task.Run(
+                () => AnnotationExcelService.ImportAsync(path, cancellationToken), cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
+            foreach (var row in rows)
+                row.AnnotationUniqueId = Guid.NewGuid().ToString();
+            _annotationGrid?.CancelEdit();
+            _annotationGrid?.ClearHistory();
+            UnobserveAllAnnotations();
+            _source.Edit(updater =>
+            {
+                updater.Clear();
+                updater.AddRange(rows);
+            });
+            foreach (var row in rows)
+                ObserveAnnotation(row);
 
-        SyncRowsToPdf(rows);
-        _messageService.Success($"已导入 {rows.Count} 条注释");
+            _hasImportedSpec = true;
+            SyncRowsToPdf(rows);
+            Status = $"已导入 {rows.Count} 条注释";
+            _messageService.Success(Status);
+            return true;
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            Status = "Spec 导入已取消";
+        }
+        catch (Exception exception)
+        {
+            Status = $"Spec 导入失败：{exception.Message}";
+            _messageService.Error(Status);
+        }
+        return false;
     }
 
-    [RelayCommand]
-    private async Task ExportAsync()
+    [RelayCommand(IncludeCancelCommand = true)]
+    private async Task ExportAsync(CancellationToken cancellationToken)
     {
-        await ExportSpecAsync();
+        await ExportSpecAsync(cancellationToken);
     }
 
-    public async Task<SpecExportOutcome> ExportSpecAsync()
+    public async Task<SpecExportOutcome> ExportSpecAsync(
+        CancellationToken cancellationToken = default)
     {
         if (_window is null)
             return SpecExportOutcome.Failed;
@@ -236,10 +264,17 @@ public partial class AcrfDocumentViewModel : Document
             if (string.IsNullOrWhiteSpace(path))
                 return SpecExportOutcome.Canceled;
 
-            await MiniExcel.SaveAsAsync(path, _annotations);
+            var rows = _annotations.Select(row => (Annotation)row.Clone()).ToArray();
+            await Task.Run(
+                () => AnnotationExcelService.ExportAsync(path, rows, cancellationToken), cancellationToken);
             Status = $"已导出：{Path.GetFileName(path)}";
             _messageService.Success(Status);
             return SpecExportOutcome.Succeeded;
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            Status = "Spec 导出已取消";
+            return SpecExportOutcome.Canceled;
         }
         catch (Exception exception)
         {
@@ -250,45 +285,51 @@ public partial class AcrfDocumentViewModel : Document
     }
 
     [RelayCommand]
-    private async Task SavePdfAsync()
+    private async Task SavePdfAsync() => await SavePdfWithResultAsync();
+
+    public async Task<bool> SavePdfWithResultAsync()
     {
         if (_viewer is null)
-            return;
+            return false;
 
         var path = await PickPdfSavePathAsync("另存 PDF", "acrf.pdf");
         if (string.IsNullOrWhiteSpace(path))
-            return;
+            return false;
 
         if (!_viewer.SaveAnnotations(path, out var error))
         {
             Status = error ?? "PDF 另存失败";
             _messageService.Error(Status);
-            return;
+            return false;
         }
 
         Status = $"PDF 注释已另存为：{Path.GetFileName(path)}";
         _messageService.Success(Status);
+        return true;
     }
 
     [RelayCommand]
-    private async Task SavePdfFlattenAsync()
+    private async Task SavePdfFlattenAsync() => await SavePdfFlattenWithResultAsync();
+
+    public async Task<bool> SavePdfFlattenWithResultAsync()
     {
         if (_viewer is null)
-            return;
+            return false;
 
         var path = await PickPdfSavePathAsync("另存 PDF 并 Flatten", "acrf_flatten.pdf");
         if (string.IsNullOrWhiteSpace(path))
-            return;
+            return false;
 
         if (!_viewer.SaveAnnotationsFlattened(path, out var error))
         {
             Status = error ?? "PDF Flatten 另存失败";
             _messageService.Error(Status);
-            return;
+            return false;
         }
 
         Status = $"Flatten PDF 已另存为：{Path.GetFileName(path)}";
         _messageService.Success(Status);
+        return true;
     }
 
     private async Task<string?> PickPdfSavePathAsync(string title, string suggestedFileName)
@@ -313,15 +354,48 @@ public partial class AcrfDocumentViewModel : Document
     {
         var item = SelectedItem;
         if (item is null) return;
+        _annotationGrid?.CommitEdit();
+        if (_annotationGrid?.IsEditing == true) return;
+        var index = _source.Items.ToList().IndexOf(item);
+        if (index < 0) return;
+        var model = _viewer?.GetAnnotationById(item.AnnotationUniqueId)?.Clone();
+        var pdfIndex = _viewer?.GetAnnotations().ToList().FindIndex(annotation => annotation.Id == item.AnnotationUniqueId) ?? -1;
+        RemoveAnnotationRow(item);
+        _annotationGrid?.RecordUndoableAction(
+            () => RestoreAnnotationRow(item, index, model, pdfIndex),
+            () => RemoveAnnotationRow(item),
+            item);
+    }
+
+    private void RemoveAnnotationRow(Annotation item)
+    {
         _synchronizing = true;
         try { _viewer?.DeleteAnnotation(item.AnnotationUniqueId); }
         finally { _synchronizing = false; }
-        var pageNum = item.PageNum;
         UnobserveAnnotation(item);
         _source.Remove(item);
-        RefreshPageAnnotationColors(pageNum);
-        SelectedItem = null;
+        RefreshPageAnnotationColors(item.PageNum);
+        if (ReferenceEquals(SelectedItem, item)) SelectedItem = null;
+        _annotationGrid?.RefreshRows();
         Status = "已删除选中注释";
+    }
+
+    private void RestoreAnnotationRow(Annotation item, int index, FreeTextAnnotationModel? model, int pdfIndex)
+    {
+        if (_source.Items.Contains(item)) return;
+        _synchronizing = true;
+        try
+        {
+            if (model != null && _viewer != null && !_viewer.RestoreAnnotation(model, pdfIndex))
+                throw new InvalidOperationException("无法恢复已删除的 PDF 注释。");
+            _source.Edit(updater => updater.Insert(Math.Clamp(index, 0, updater.Count), item));
+            ObserveAnnotation(item);
+            RefreshPageAnnotationColors(item.PageNum);
+        }
+        finally { _synchronizing = false; }
+        _annotationGrid?.RefreshRows();
+        SelectedItem = item;
+        Status = "已撤销删除注释";
     }
 
     [RelayCommand]
@@ -406,54 +480,26 @@ public partial class AcrfDocumentViewModel : Document
         SelectedItem.AnnotationText = SelectedItem.AnnotationText.ToUpperInvariant();
     }
 
-    private static PdfFont CreateAnnotationMeasurementFont()
+    private static TrueTypeFontMetrics CreateMeasurementFont(string fontFileName)
     {
-        var fontPath = Path.Combine(AppContext.BaseDirectory, "Fonts", "ARIAL.TTF");
-        if (File.Exists(fontPath))
-            return PdfFontFactory.CreateFont(fontPath, PdfEncodings.IDENTITY_H);
-
-        return PdfFontFactory.CreateFont(iText.IO.Font.Constants.StandardFonts.HELVETICA);
+        var fontPath = Path.Combine(AppContext.BaseDirectory, "Fonts", fontFileName);
+        if (!File.Exists(fontPath))
+            throw new FileNotFoundException($"Required annotation measurement font was not found: {fontFileName}", fontPath);
+        return new TrueTypeFontMetrics(fontPath);
     }
 
-    private static PdfFont CreateDomainAnnotationMeasurementFont()
-    {
-        var fontPath = Path.Combine(AppContext.BaseDirectory, "Fonts", "ARIALBD.TTF");
-        if (File.Exists(fontPath))
-            return PdfFontFactory.CreateFont(fontPath, PdfEncodings.IDENTITY_H);
+    private TrueTypeFontMetrics GetAnnotationMeasurementFont() =>
+        Language ? ChineseAnnotationMeasurementFont.Value : AnnotationMeasurementFont.Value;
 
-        return PdfFontFactory.CreateFont(iText.IO.Font.Constants.StandardFonts.HELVETICA_BOLD);
-    }
-
-    private static PdfFont CreateChineseAnnotationMeasurementFont()
-    {
-        var fontPath = Path.Combine(AppContext.BaseDirectory, "Fonts", "ARIALUNI.TTF");
-        if (File.Exists(fontPath))
-            return PdfFontFactory.CreateFont(fontPath, PdfEncodings.IDENTITY_H);
-
-        return PdfFontFactory.CreateFont(iText.IO.Font.Constants.StandardFonts.HELVETICA);
-    }
-
-    private static PdfFont CreateChineseDomainAnnotationMeasurementFont()
-    {
-        var fontPath = Path.Combine(AppContext.BaseDirectory, "Fonts", "ARIALUNI.TTF");
-        if (File.Exists(fontPath))
-            return PdfFontFactory.CreateFont(fontPath, PdfEncodings.IDENTITY_H);
-
-        return PdfFontFactory.CreateFont(iText.IO.Font.Constants.StandardFonts.HELVETICA);
-    }
-
-    private PdfFont GetAnnotationMeasurementFont() =>
-        Language ? ChineseAnnotationMeasurementFont : AnnotationMeasurementFont;
-
-    private PdfFont GetDomainAnnotationMeasurementFont() =>
-        Language ? ChineseDomainAnnotationMeasurementFont : DomainAnnotationMeasurementFont;
+    private TrueTypeFontMetrics GetDomainAnnotationMeasurementFont() =>
+        Language ? ChineseAnnotationMeasurementFont.Value : DomainAnnotationMeasurementFont.Value;
 
     private double GetAnnotationTextWidth(string text)
     {
         var font = GetAnnotationMeasurementFont();
         var maxLineWidth = text
             .Split(["\r\n", "\r", "\n"], StringSplitOptions.None)
-            .Select(line => (double)font.GetWidth(line, AnnotationFontSize))
+            .Select(line => font.GetWidth(line, AnnotationFontSize))
             .DefaultIfEmpty(0)
             .Max();
         return Math.Max(1, maxLineWidth + AnnotationHorizontalPadding);
@@ -548,54 +594,112 @@ public partial class AcrfDocumentViewModel : Document
             .ToList();
     }
 
+    private static Dictionary<int, List<string>> BuildDistinctDomainCodesByPage(
+        IEnumerable<Annotation> annotations)
+    {
+        var domainsByPage = new Dictionary<int, List<string>>();
+        var seenDomainsByPage = new Dictionary<int, HashSet<string>>();
+        foreach (var annotation in annotations)
+        {
+            var domain = NormalizeDomainCode(annotation.AnnotationTextDomain);
+            if (domain is null)
+                continue;
+
+            if (!domainsByPage.TryGetValue(annotation.PageNum, out var domains))
+            {
+                domains = [];
+                domainsByPage.Add(annotation.PageNum, domains);
+                seenDomainsByPage.Add(
+                    annotation.PageNum,
+                    new HashSet<string>(StringComparer.OrdinalIgnoreCase));
+            }
+
+            if (seenDomainsByPage[annotation.PageNum].Add(domain))
+                domains.Add(domain);
+        }
+
+        return domainsByPage;
+    }
+
     private string GetAnnotationDomainColor(Annotation annotation)
     {
         var domain = NormalizeDomainCode(annotation.AnnotationTextDomain);
         if (annotation.PageNum <= 0 || domain is null)
             return DomainColors[0];
 
-        var domains = GetDistinctDomainCodes(annotation.PageNum);
-        var index = domains.FindIndex(item => string.Equals(item, domain, StringComparison.OrdinalIgnoreCase));
-        return DomainColors[index is >= 0 and < 4 ? index : 0];
+        return GetAnnotationDomainColor(annotation, GetDistinctDomainCodes(annotation.PageNum));
+    }
+
+    private static string GetAnnotationDomainColor(
+        Annotation annotation,
+        IReadOnlyList<string>? domains)
+    {
+        var domain = NormalizeDomainCode(annotation.AnnotationTextDomain);
+        if (annotation.PageNum <= 0 || domain is null || domains is null)
+            return DomainColors[0];
+
+        for (var index = 0; index < domains.Count; index++)
+        {
+            if (string.Equals(domains[index], domain, StringComparison.OrdinalIgnoreCase))
+                return DomainColors[index is >= 0 and < 4 ? index : 0];
+        }
+
+        return DomainColors[0];
     }
 
     private void RefreshPageAnnotationColors(int pageNum)
     {
         if (_viewer is null) return;
+        var domainsByPage = BuildDistinctDomainCodesByPage(_annotations);
+        IReadOnlyList<string> domains = domainsByPage.TryGetValue(pageNum, out var pageDomains)
+            ? pageDomains
+            : Array.Empty<string>();
         if (pageNum > 0)
         {
             foreach (var annotation in _annotations.Where(a => a.PageNum == pageNum && !string.IsNullOrWhiteSpace(a.AnnotationText)))
             {
-                var color = GetAnnotationDomainColor(annotation);
-                _viewer.UpdateAnnotation(annotation.AnnotationUniqueId, model => model.BackgroundColorHex = color);
+                var color = GetAnnotationDomainColor(annotation, domains);
+                _viewer.UpdateAnnotationBackgroundColor(annotation.AnnotationUniqueId, color);
             }
         }
 
-        GenerateDomainAnnotations();
+        GenerateDomainAnnotations(domainsByPage, pageNum);
     }
 
     private void RefreshAllAnnotationColors()
     {
         if (_viewer is null) return;
-        foreach (var pageNum in _annotations.Select(a => a.PageNum).Where(page => page > 0).Distinct())
+        var domainsByPage = BuildDistinctDomainCodesByPage(_annotations);
+        foreach (var annotation in _annotations)
         {
-            foreach (var annotation in _annotations.Where(a => a.PageNum == pageNum && !string.IsNullOrWhiteSpace(a.AnnotationText)))
-            {
-                var color = GetAnnotationDomainColor(annotation);
-                _viewer.UpdateAnnotation(annotation.AnnotationUniqueId, model => model.BackgroundColorHex = color);
-            }
+            if (annotation.PageNum <= 0 || string.IsNullOrWhiteSpace(annotation.AnnotationText))
+                continue;
+
+            IReadOnlyList<string> domains = domainsByPage.TryGetValue(annotation.PageNum, out var pageDomains)
+                ? pageDomains
+                : Array.Empty<string>();
+            var color = GetAnnotationDomainColor(annotation, domains);
+            _viewer.UpdateAnnotationBackgroundColor(annotation.AnnotationUniqueId, color);
         }
 
-        GenerateDomainAnnotations();
+        GenerateDomainAnnotations(domainsByPage);
     }
 
-    private void GenerateDomainAnnotations()
+    private void GenerateDomainAnnotations(
+        IReadOnlyDictionary<int, List<string>>? domainsByPage = null,
+        int? pageNum = null)
     {
         if (_viewer is null) return;
+        domainsByPage ??= BuildDistinctDomainCodesByPage(_annotations);
+        var firstPage = pageNum is > 0 ? pageNum.Value - 1 : 0;
+        var lastPage = pageNum is > 0 ? pageNum.Value - 1 : _viewer.PageCount - 1;
 
-        for (var pageIndex = 0; pageIndex < _viewer.PageCount; pageIndex++)
+        for (var pageIndex = firstPage; pageIndex <= lastPage && pageIndex < _viewer.PageCount; pageIndex++)
         {
-            var displays = GetDistinctDomainCodes(pageIndex + 1)
+            IReadOnlyList<string> domains = domainsByPage.TryGetValue(pageIndex + 1, out var pageDomains)
+                ? pageDomains
+                : Array.Empty<string>();
+            var displays = domains
                 .Select((domain, index) =>
                 {
                     var text = _cdiscDatasetCatalog.FormatDomain(domain) ?? domain;
@@ -616,6 +720,9 @@ public partial class AcrfDocumentViewModel : Document
 
     private async void OnViewerDocumentLoaded(object? sender, EventArgs e)
     {
+        _annotationGrid?.ClearHistory();
+        if (_hasImportedSpec)
+            SyncRowsToPdf(_annotations);
         NormalizeLoadedAnnotationHeights();
         ApplyAnnotationFontFamily();
         await SynchronizeAnnotationDomainsAsync(_annotations);
@@ -657,28 +764,35 @@ public partial class AcrfDocumentViewModel : Document
         _synchronizing = true;
         try
         {
+            var domainsByPage = BuildDistinctDomainCodesByPage(_annotations);
             var models = rows
                 .Where(row => row.PageNum > 0 && !string.IsNullOrWhiteSpace(row.AnnotationText))
-                .Select(row => new FreeTextAnnotationModel
+                .Select(row =>
                 {
-                    Id = row.AnnotationUniqueId,
-                    PageIndex = row.PageNum - 1,
-                    PdfX = row.X,
-                    PdfY = row.Y,
-                    Width = GetAnnotationWidth(row),
-                    Height = GetAnnotationHeight(row.Line),
-                    Text = row.AnnotationText,
-                    FontSize = 12,
-                    FontFamily = GetAnnotationFontFamily(),
-                    BorderStyle = row.AnnotationDotted
-                        ? PdfViewerControl.Models.AnnotationBorderStyle.Dashed
-                        : PdfViewerControl.Models.AnnotationBorderStyle.Solid,
-                    BackgroundColorHex = GetAnnotationDomainColor(row)
+                    IReadOnlyList<string> domains = domainsByPage.TryGetValue(row.PageNum, out var pageDomains)
+                        ? pageDomains
+                        : Array.Empty<string>();
+                    return new FreeTextAnnotationModel
+                    {
+                        Id = row.AnnotationUniqueId,
+                        PageIndex = row.PageNum - 1,
+                        PdfX = row.X,
+                        PdfY = row.Y,
+                        Width = GetAnnotationWidth(row),
+                        Height = GetAnnotationHeight(row.Line),
+                        Text = row.AnnotationText,
+                        FontSize = 12,
+                        FontFamily = GetAnnotationFontFamily(),
+                        BorderStyle = row.AnnotationDotted
+                            ? PdfViewerControl.Models.AnnotationBorderStyle.Dashed
+                            : PdfViewerControl.Models.AnnotationBorderStyle.Solid,
+                        BackgroundColorHex = GetAnnotationDomainColor(row, domains)
+                    };
                 })
                 .ToList();
 
             _viewer.ReplaceAnnotations(models);
-            GenerateDomainAnnotations();
+            GenerateDomainAnnotations(domainsByPage);
         }
         finally { _synchronizing = false; }
     }
@@ -708,8 +822,11 @@ public partial class AcrfDocumentViewModel : Document
 
     private void OnAnnotationMoved(object? sender, AnnotationMovedEventArgs e)
     {
+        if (_synchronizing) return;
         var row = _annotations.FirstOrDefault(x => x.AnnotationUniqueId == e.Annotation.Id);
         if (row is null) return;
+        var previousX = row.X;
+        var previousY = row.Y;
         _synchronizing = true;
         try
         {
@@ -720,6 +837,35 @@ public partial class AcrfDocumentViewModel : Document
             RefreshAllAnnotationColors();
         }
         finally { _synchronizing = false; }
+
+        if (e.PreviousPosition is { } previousPosition &&
+            (previousPosition.X != e.Annotation.PdfX || previousPosition.Y != e.Annotation.PdfY))
+        {
+            var pageIndex = e.Annotation.PageIndex;
+            var nextPosition = new Avalonia.Point(e.Annotation.PdfX, e.Annotation.PdfY);
+            var nextX = row.X;
+            var nextY = row.Y;
+            _annotationGrid?.RecordUndoableAction(
+                () => RestoreAnnotationPosition(row, pageIndex, previousX, previousY, previousPosition),
+                () => RestoreAnnotationPosition(row, pageIndex, nextX, nextY, nextPosition),
+                row);
+        }
+    }
+
+    private void RestoreAnnotationPosition(Annotation row, int pageIndex, int x, int y, Avalonia.Point position)
+    {
+        if (!_observedAnnotations.Contains(row) || _viewer?.GetAnnotationById(row.AnnotationUniqueId) is null)
+            return;
+
+        var wasSynchronizing = _synchronizing;
+        _synchronizing = true;
+        try
+        {
+            row.X = x;
+            row.Y = y;
+            _viewer.UpdateAnnotationPosition(row.AnnotationUniqueId, pageIndex, position.X, position.Y);
+        }
+        finally { _synchronizing = wasSynchronizing; }
     }
 
     partial void OnSelectedItemChanged(Annotation? oldValue, Annotation? newValue)
@@ -732,16 +878,23 @@ public partial class AcrfDocumentViewModel : Document
                 newValue.AnnotationUniqueId,
                 StringComparison.Ordinal))
         {
-            if (_viewer.SelectAnnotationById(newValue.AnnotationUniqueId))
+            // Selecting a PDF control raises AnnotationSelected synchronously.
+            // The outer selection already performs the grid reveal.
+            _selectingPdfAnnotation = true;
+            try
             {
-                _viewer.ScrollAnnotationIntoView(newValue.AnnotationUniqueId);
+                if (_viewer.SelectAnnotationById(newValue.AnnotationUniqueId))
+                {
+                    _viewer.ScrollAnnotationIntoView(newValue.AnnotationUniqueId);
+                }
+                else
+                {
+                    _viewer.ClearAnnotationSelection();
+                    if (newValue.PageNum > 0)
+                        _viewer.ScrollToPageNumber(newValue.PageNum);
+                }
             }
-            else
-            {
-                _viewer.ClearAnnotationSelection();
-                if (newValue.PageNum > 0)
-                    _viewer.ScrollToPageNumber(newValue.PageNum);
-            }
+            finally { _selectingPdfAnnotation = false; }
         }
 
         _annotationGrid?.ScrollIntoView(newValue);
@@ -749,6 +902,8 @@ public partial class AcrfDocumentViewModel : Document
 
     private void OnAnnotationSelected(object? sender, AnnotationSelectedEventArgs e)
     {
+        if (_selectingPdfAnnotation)
+            return;
         var row = _annotations.FirstOrDefault(annotation =>
             string.Equals(annotation.AnnotationUniqueId, e.AnnotationId, StringComparison.Ordinal));
         if (row is null)
@@ -761,8 +916,15 @@ public partial class AcrfDocumentViewModel : Document
 
     private void SetSelectedAnnotationRow(Annotation? selectedRow)
     {
-        foreach (var row in _annotations)
-            row.IsSelected = ReferenceEquals(row, selectedRow);
+        if (ReferenceEquals(_selectedAnnotationRow, selectedRow))
+            return;
+
+        var previous = _selectedAnnotationRow;
+        _selectedAnnotationRow = selectedRow;
+        if (previous != null)
+            previous.IsSelected = false;
+        if (selectedRow != null)
+            selectedRow.IsSelected = true;
     }
 
     private void ObserveAnnotation(Annotation annotation)

@@ -1,4 +1,5 @@
-﻿﻿using System.Linq;
+using System.Diagnostics;
+using System.Linq;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.Primitives;
@@ -9,6 +10,7 @@ using Avalonia.Interactivity;
 using Avalonia.Media;
 using Avalonia.Media.Immutable;
 using Avalonia.Styling;
+using Avalonia.Threading;
 using PatChes.Controls.DataGrid.Searching;
 
 namespace PatChes.Controls.DataGrid;
@@ -39,11 +41,34 @@ public class DataGridCell : Control
     public new static readonly StyledProperty<double> WidthProperty =
         AvaloniaProperty.Register<DataGridCell, double>(nameof(Width));
 
+    // Arc light neutral: MixOklab(#FFFFFF, #353535, 0.05).
+    private static readonly IBrush SelectedRowBackground = new ImmutableSolidColorBrush(Color.Parse("#F4F4F4"));
+
+    private static readonly IBrush GridLineBrush = new ImmutableSolidColorBrush(Color.Parse("#E8E8E8"));
+    private static readonly IBrush SearchMatchBackground = new ImmutableSolidColorBrush(Color.Parse("#FFF3CD"));
+    private static readonly IBrush CurrentSearchMatchBackground = new ImmutableSolidColorBrush(Color.Parse("#FFE082"));
+
     private Border? _border;
     private Control? _displayElement;
     private Control? _editingElement;
     private object? _uneditedValue;
     private bool _built;
+
+    // Undo/redo feedback: a dark grey wash painted over the cell content. The cell owns it so a
+    // viewport refresh during a history replay cannot drop it, and it is drawn instead of being
+    // composited, so every frame is guaranteed to land.
+    private HistoryFlashLayer? _historyFlashLayer;
+    private DispatcherTimer? _historyFlashTimer;
+    private long _historyFlashStarted;
+    private double _historyFlashWash;
+    private const double HistoryFlashFadeInMilliseconds = 120;
+    private const double HistoryFlashHoldMilliseconds = 320;
+    private const double HistoryFlashFadeOutMilliseconds = 880;
+    private const double HistoryFlashDurationMilliseconds =
+        HistoryFlashFadeInMilliseconds + HistoryFlashHoldMilliseconds + HistoryFlashFadeOutMilliseconds;
+    private const byte HistoryFlashAlpha = 0x66;
+    private static readonly Color HistoryFlashColor = Color.Parse("#3A3A3A");
+    private static readonly Avalonia.Animation.Easings.SplineEasing HistoryFlashFadeOutEasing = new(0.42, 0, 1, 1);
 
     // Validation icon (ProDataGrid Path-based style)
     private Grid? _innerPanel;
@@ -57,7 +82,7 @@ public class DataGridCell : Control
 
     public DataGridColumn? Column { get => GetValue(ColumnProperty); set => SetValue(ColumnProperty, value); }
     public object? DataItem { get => GetValue(DataItemProperty); set => SetValue(DataItemProperty, value); }
-    public bool IsSelected { get => GetValue(IsSelectedProperty); set { SetValue(IsSelectedProperty, value); UpdateBg(); } }
+    public bool IsSelected { get => GetValue(IsSelectedProperty); set { if (IsSelected == value) return; SetValue(IsSelectedProperty, value); UpdateBg(); } }
     public bool IsEditing { get => GetValue(IsEditingProperty); set { SetValue(IsEditingProperty, value); OnIsEditingChanged(); } }
     public bool IsValid { get => GetValue(IsValidProperty); set { SetValue(IsValidProperty, value); UpdateBg(); } }
     public DataGridValidationSeverity ValidationSeverity { get => GetValue(ValidationSeverityProperty); set { SetValue(ValidationSeverityProperty, value); UpdateBg(); } }
@@ -151,6 +176,13 @@ public class DataGridCell : Control
         }
         Grid.SetColumn(_errorIconBorder, 0);
         _innerPanel.Children.Add(_errorIconBorder);
+
+        // A child of the content grid: it is painted after the displayed value in the same pass, so
+        // neither the border background nor a display/edit swap can hide the wash.
+        _historyFlashLayer = new HistoryFlashLayer(this) { IsHitTestVisible = false };
+        Grid.SetColumn(_historyFlashLayer, 0);
+        Grid.SetColumnSpan(_historyFlashLayer, 2);
+        _innerPanel.Children.Add(_historyFlashLayer);
 
         _border.Child = _innerPanel;
         UpdateValidationIcon();
@@ -274,6 +306,63 @@ public class DataGridCell : Control
         base.OnAttachedToVisualTree(e);
         EnsureBuilt();
         AddHandler(DoubleTappedEvent, OnDoubleTapped);
+    }
+
+    /// <summary>
+    /// Plays the undo/redo wash on this cell: quick fade in, a short hold, then a slow fade out.
+    /// The cell owns the layer so a viewport refresh during a history replay cannot drop it.
+    /// </summary>
+    internal void FlashHistoryChange()
+    {
+        _historyFlashStarted = Stopwatch.GetTimestamp();
+        if (_historyFlashTimer == null)
+        {
+            _historyFlashTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(16) };
+            _historyFlashTimer.Tick += OnHistoryFlashTick;
+        }
+        _historyFlashTimer.Start();
+        AdvanceHistoryFlash();
+    }
+
+    private void OnHistoryFlashTick(object? sender, EventArgs e) => AdvanceHistoryFlash();
+
+    private void AdvanceHistoryFlash()
+    {
+        var elapsed = Stopwatch.GetElapsedTime(_historyFlashStarted).TotalMilliseconds;
+        if (elapsed >= HistoryFlashDurationMilliseconds)
+        {
+            StopHistoryFlash();
+            return;
+        }
+
+        double wash;
+        if (elapsed < HistoryFlashFadeInMilliseconds)
+            wash = elapsed / HistoryFlashFadeInMilliseconds;
+        else if (elapsed < HistoryFlashFadeInMilliseconds + HistoryFlashHoldMilliseconds)
+            wash = 1;
+        else
+            wash = 1 - HistoryFlashFadeOutEasing.Ease(Math.Clamp(
+                (elapsed - HistoryFlashFadeInMilliseconds - HistoryFlashHoldMilliseconds) /
+                HistoryFlashFadeOutMilliseconds, 0, 1));
+
+        _historyFlashWash = Math.Clamp(wash, 0, 1);
+        _historyFlashLayer?.InvalidateVisual();
+    }
+
+    private void StopHistoryFlash()
+    {
+        _historyFlashTimer?.Stop();
+        if (_historyFlashWash <= 0) return;
+        _historyFlashWash = 0;
+        _historyFlashLayer?.InvalidateVisual();
+    }
+
+    protected override void OnPropertyChanged(AvaloniaPropertyChangedEventArgs change)
+    {
+        base.OnPropertyChanged(change);
+        // A recycled cell now shows a different record; the old highlight no longer applies.
+        if (change.Property == DataItemProperty)
+            StopHistoryFlash();
     }
 
     protected override void OnDetachedFromVisualTree(VisualTreeAttachmentEventArgs e)
@@ -427,7 +516,7 @@ public class DataGridCell : Control
             _border.BorderBrush = Brushes.Transparent;
             _border.BorderThickness = new Thickness(0);
         }
-        else if (IsSelected)
+        else if (IsSelected && OwningRow?.OwningGrid?.SelectionUnit != DataGridSelectionUnit.Cell)
         {
             _border.Background = ValidationSeverity switch
             {
@@ -437,11 +526,15 @@ public class DataGridCell : Control
                     new SolidColorBrush(Color.Parse("#f3d19e")),
                 DataGridValidationSeverity.Info =>
                     new SolidColorBrush(Color.Parse("#EEF6FF")),
-                _ => new SolidColorBrush(Color.Parse("#D6EBFF")),
+                _ => SelectedRowBackground,
             };
             _border.BorderBrush = new SolidColorBrush(Color.Parse("#0078D4"));
-            _border.BorderThickness = OwningRow?.OwningGrid?.GetCellSelectionBorderThickness(this)
-                ?? new Thickness(0.5);
+            if (OwningRow?.OwningGrid?.SelectionUnit == DataGridSelectionUnit.Cell)
+            {
+                _border.BorderBrush = GridLineBrush;
+                _border.BorderThickness = new Thickness(0, 0, right, bottom);
+            }
+            else _border.BorderThickness = new Thickness(0.5);
         }
         else if (ValidationSeverity == DataGridValidationSeverity.InValid)
         {
@@ -471,22 +564,22 @@ public class DataGridCell : Control
         {
             var grid = OwningRow?.OwningGrid;
             _border.Background = OwningRow?.IsSelected == true
-                ? new SolidColorBrush(Color.Parse("#B7DBFF"))
+                ? SelectedRowBackground
                 : OwningRow?.IsPointerOver == true
                     ? grid?.RowHoverBackground ?? Brushes.Transparent
                     : grid?.RowBackground ?? new SolidColorBrush(Colors.White);
-            _border.BorderBrush = new SolidColorBrush(Color.Parse("#E8E8E8"));
+            _border.BorderBrush = GridLineBrush;
             _border.BorderThickness = new Thickness(0, 0, right, bottom);
         }
         else
         {
             var grid = OwningRow?.OwningGrid;
             _border.Background = OwningRow?.IsSelected == true
-                ? new SolidColorBrush(Color.Parse("#B7DBFF"))
+                ? SelectedRowBackground
                 : OwningRow?.IsPointerOver == true
                     ? grid?.RowHoverBackground ?? Brushes.Transparent
                     : Brushes.Transparent;
-            _border.BorderBrush = new SolidColorBrush(Color.Parse("#E8E8E8"));
+            _border.BorderBrush = GridLineBrush;
             _border.BorderThickness = new Thickness(0, 0, right, bottom);
         }
 
@@ -503,7 +596,7 @@ public class DataGridCell : Control
         if (matches is { Count: > 0 })
         {
             var isCurrent = grid.GetCellSearchResult(this) != null;
-            _border.Background = new SolidColorBrush(Color.Parse(isCurrent ? "#FFE082" : "#FFF3CD"));
+            _border.Background = isCurrent ? CurrentSearchMatchBackground : SearchMatchBackground;
         }
     }
 
@@ -513,5 +606,20 @@ public class DataGridCell : Control
         if (grid == null || Column == null) return false;
         int idx = grid.Columns.IndexOf(Column);
         return idx < grid.LeftFrozenColumnCount || idx >= grid.Columns.Count - grid.RightFrozenColumnCount;
+    }
+
+    // Draws the wash itself, with the fade baked into the brush alpha, so no compositor layer or
+    // child-visual bookkeeping stands between the animation and the screen.
+    private sealed class HistoryFlashLayer(DataGridCell owner) : Control
+    {
+        public override void Render(DrawingContext context)
+        {
+            var wash = owner._historyFlashWash;
+            if (wash <= 0) return;
+            var alpha = (byte)Math.Clamp(HistoryFlashAlpha * wash, 0, 255);
+            var brush = new ImmutableSolidColorBrush(
+                Color.FromArgb(alpha, HistoryFlashColor.R, HistoryFlashColor.G, HistoryFlashColor.B));
+            context.FillRectangle(brush, new Rect(Bounds.Size));
+        }
     }
 }

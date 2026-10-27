@@ -5,7 +5,7 @@
              x:Class="AcrfAnnotationTool.Views.PdfToolView"
              x:DataType="vm:AcrfDocumentViewModel"
              x:CompileBindings="True">
-  <Border Background="White" BorderBrush="#FFE5E7EB" BorderThickness="1" CornerRadius="4">
+  <Border Background="White" BorderBrush="#FFE5E7EB" BorderThickness="1" CornerRadius="4" ClipToBounds="True">
     <pdf:PdfViewer x:Name="PdfViewer" />
   </Border>
 </UserControl>

@@ -338,14 +338,7 @@ public class DataGridColumnHeader : Control
                 VerticalAlignment = Avalonia.Layout.VerticalAlignment.Center,
                 Margin = new Thickness(0, 1),
             };
-            checkBox.Bind(
-                AtomCheckBox.IsCheckedProperty,
-                new Binding
-                {
-                    Source = column,
-                    Path = nameof(DataGridColumn.IsVisible),
-                    Mode = BindingMode.TwoWay,
-                });
+            checkBox[!AtomCheckBox.IsCheckedProperty] = column[!DataGridColumn.IsVisibleProperty];
             checkBox.PropertyChanged += (_, args) =>
             {
                 if (args.Property == AtomCheckBox.IsCheckedProperty &&

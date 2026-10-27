@@ -2,6 +2,15 @@
 
 基于 Avalonia 和 .NET 10 的桌面端 ACRF 注释编辑工具，用于在 PDF 表单上查看、编辑和管理 FreeText 注释，并通过 Excel 注释 Spec 与 PDF 注释之间进行数据同步。
 
+当前版本：**v0.45**。版本变更见 [更新日志](CHANGELOG.md)。
+
+### v0.45 更新要点
+
+- 支持 Windows x64 Native AOT 发布。
+- 优化表格选区动画、拖动选择和 PDF 双向选择联动，减少重复计算与布局。
+- 优化 PDF 页面缓存检查和位图临时缓冲，改善长文档滚动时的分配开销。
+- 保留页面渲染清晰度及前后两页预加载范围；性能与内存改善幅度需结合实际文档测量。
+
 ## 功能概览
 
 ### PDF 预览与注释
@@ -68,7 +77,7 @@ Domain annotation 位置配置文件位于：
 
 - Windows（当前主要运行环境）
 - .NET SDK `10.0.301` 或兼容的 .NET 10 SDK
-- Avalonia `12.1.1`
+- Avalonia `12.1.4`
 
 项目通过 `global.json` 固定 SDK 版本：
 
@@ -112,11 +121,19 @@ dotnet build
 dotnet build --no-restore -p:OutputPath=artifacts\verify
 ```
 
-发布构建：
+Windows x64 Native AOT 发布（需要 Visual Studio Build Tools 的 C++ 桌面开发工具及 Windows SDK）：
 
 ```powershell
-dotnet publish -c Release -o publish
+dotnet publish AcrfAnnotationTool.csproj -c Release -r win-x64 -p:PublishAot=true -o publish
 ```
+
+Release 配置指定运行时标识时默认启用 AOT。常规托管发布需显式关闭：
+
+```powershell
+dotnet publish AcrfAnnotationTool.csproj -c Release -r win-x64 -p:PublishAot=false -o publish-managed
+```
+
+分发时保留发布目录中的依赖、`Fonts` 和 `cdisc_setting.db`。PDB 可不随用户包分发，但建议内部保存与该版本匹配的符号，以便诊断崩溃。
 
 ## 资源文件
 
@@ -138,14 +155,15 @@ Fonts\
 └── iconfont.ttf
 ```
 
-PDF 注释文本测量优先从应用目录下的 `Fonts` 子目录加载：
+PDF 注释文本测量从应用目录下的 `Fonts` 子目录加载对应字体：
 
 ```text
-<AppContext.BaseDirectory>\Fonts\ARIALUNI.TTF
+<AppContext.BaseDirectory>\Fonts\ARIAL.TTF
 <AppContext.BaseDirectory>\Fonts\ARIALBD.TTF
+<AppContext.BaseDirectory>\Fonts\ARIALUNI.TTF
 ```
 
-当字体资源缺失时，程序会回退到 Helvetica 字体，不依赖 Windows 系统字体目录中的文件。
+这些测量字体为必需资源，缺失时会报告错误，不会静默回退；不依赖 Windows 系统字体目录中的文件。
 
 ## 数据库资源
 
@@ -219,16 +237,15 @@ acrf-annotation-tool/
 ## 主要技术栈
 
 - .NET 10
-- Avalonia 12.1.1
+- Avalonia 12.1.4
 - AtomUI Desktop Controls
-- Dock.Avalonia
+- 项目内 Dock 控件
 - CommunityToolkit.Mvvm
 - DynamicData
-- iText 7
 - PDFsharp
 - Docnet.Core
-- MiniExcel
-- SqlSugarCore
+- 项目内 AnnotationExcelService（Excel Spec 导入与导出）
+- Microsoft.Data.Sqlite
 - Microsoft.Extensions.DependencyInjection
 
 ## 说明

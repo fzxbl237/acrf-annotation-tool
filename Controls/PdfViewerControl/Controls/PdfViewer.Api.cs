@@ -7,9 +7,10 @@ using PdfViewerControl.Models;
 
 namespace PdfViewerControl.Controls;
 
-public sealed class AnnotationMovedEventArgs(FreeTextAnnotationModel annotation) : EventArgs
+public sealed class AnnotationMovedEventArgs(FreeTextAnnotationModel annotation, Point? previousPosition = null) : EventArgs
 {
     public FreeTextAnnotationModel Annotation { get; } = annotation;
+    public Point? PreviousPosition { get; } = previousPosition;
 }
 
 public sealed class AnnotationCreatedEventArgs(FreeTextAnnotationModel annotation) : EventArgs
@@ -175,6 +176,19 @@ public partial class PdfViewer
         model.Height = height;
         if (_annotationControls.TryGetValue(id, out var ctrl))
             ctrl.ApplyLayoutFromPdf(_loader.GetPageHeightInPoints(model.PageIndex), _loader.DisplayScale);
+        return true;
+    }
+
+    public bool RestoreAnnotation(FreeTextAnnotationModel snapshot, int index)
+    {
+        if (snapshot.PageIndex < 0 || snapshot.PageIndex >= _loader.PageCount ||
+            GetAnnotationById(snapshot.Id) != null)
+            return false;
+
+        var model = snapshot.Clone();
+        _annotations.Insert(Math.Clamp(index, 0, _annotations.Count), model);
+        if (_pageSlots[model.PageIndex].AnnotationLayer is { } layer)
+            RebuildAnnotationsForPage(model.PageIndex, _loader.GetPageHeightInPoints(model.PageIndex), _loader.DisplayScale, layer);
         return true;
     }
 
@@ -353,6 +367,17 @@ public partial class PdfViewer
         _currentPageIndex = pageIndex;
         UpdatePageInfo();
         RequestVirtualizationImmediate();
+        return true;
+    }
+
+    public bool UpdateAnnotationBackgroundColor(string id, string colorHex)
+    {
+        var model = _annotations.FirstOrDefault(a => a.Id == id);
+        if (model == null) return false;
+        if (string.Equals(model.BackgroundColorHex, colorHex, StringComparison.OrdinalIgnoreCase))
+            return true;
+        model.BackgroundColorHex = colorHex;
+        if (_annotationControls.TryGetValue(id, out var control)) control.UpdateChrome();
         return true;
     }
 

@@ -39,8 +39,7 @@ public class DataGridNumericUpDownColumn : DataGridBoundColumn
 
         if (Binding != null && dataItem != null)
         {
-            var binding = CloneBinding(Binding);
-            if (binding is Binding dataBinding) dataBinding.Mode = BindingMode.OneWay;
+            var binding = CloneBinding(Binding, BindingMode.OneWay);
             textBlock.Bind(TextBlock.TextProperty, binding);
         }
         else if (dataItem != null)
@@ -72,7 +71,7 @@ public class DataGridNumericUpDownColumn : DataGridBoundColumn
 
         if (dataItem != null && !string.IsNullOrWhiteSpace(BindingPath))
         {
-            var property = dataItem.GetType().GetProperty(BindingPath);
+            var property = DataGridBoundColumn.GetItemProperty(dataItem, BindingPath);
             var currentValue = property?.GetValue(dataItem);
             if (currentValue != null)
                 numericUpDown.Value = System.Convert.ToDecimal(currentValue);

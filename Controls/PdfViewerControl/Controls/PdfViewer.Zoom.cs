@@ -139,23 +139,19 @@ public partial class PdfViewer
         }
     }
 
-    /// <summary>Top of the given page in scroll coordinates, derived from the page sizes instead of
-    /// <see cref="Control.Bounds"/>, which is not up to date before the layout pass has run.</summary>
+    /// <summary>Top of the given page in scroll coordinates.</summary>
     private double GetPageHostTop(int pageIndex)
     {
-        var top = 0.0;
-        var count = Math.Min(pageIndex, _pageSlots.Count);
-        for (var i = 0; i < count; i++)
-            top += _loader.PageSizes.Count > i ? _loader.PageSizes[i].Height + 6 : 800;
-        return top;
+        if (_pageHostTops.Count == 0) return PagesPanel.Margin.Top;
+        return _pageHostTops[Math.Clamp(pageIndex, 0, _pageHostTops.Count - 1)];
     }
 
     private void InvalidateAllPageBitmaps(bool keepVisible = false)
     {
-        var keep = keepVisible ? new HashSet<int>(GetVisiblePageRange(ViewportPageBuffer)) : null;
+        var (first, last) = keepVisible ? GetVisiblePageBounds(ViewportPageBuffer) : (0, -1);
         foreach (var s in _pageSlots)
         {
-            if (keep != null && keep.Contains(s.PageIndex) && s.PageImage?.Source != null)
+            if (keepVisible && s.PageIndex >= first && s.PageIndex <= last && s.PageImage?.Source != null)
             {
                 s.IsBitmapLoaded = false;
                 s.IsRendering = false;
@@ -170,13 +166,13 @@ public partial class PdfViewer
     private void ReleaseFramesOutsideVisible()
     {
         if (_pageSlots.Count == 0) return;
-        var keep = new HashSet<int>(GetVisiblePageRange(ViewportPageBuffer));
-        foreach (var s in _pageSlots)
+        var (first, last) = GetVisiblePageBounds(ViewportPageBuffer);
+        // Only cached frames can be evicted; document length is irrelevant here.
+        for (var i = _bitmapSlots.Count - 1; i >= 0; i--)
         {
-            if (!keep.Contains(s.PageIndex) && s.PageImage?.Source != null)
-            {
-                ReleasePageBitmap(s);
-            }
+            var slot = _bitmapSlots[i];
+            if (slot.PageIndex < first || slot.PageIndex > last)
+                ReleasePageBitmap(slot);
         }
     }
 }

@@ -92,7 +92,10 @@ public abstract class DataGridColumn : AvaloniaObject
 
         if (this is DataGridBoundColumn bound && !string.IsNullOrEmpty(bound.BindingPath))
         {
-            var prop = dataItem.GetType().GetProperty(bound.BindingPath);
+            if (DataGridBoundColumn.TryGetAnnotationValue(dataItem, bound.BindingPath, ignoreCase: false, out var value))
+                return value?.ToString() ?? "";
+
+            var prop = DataGridBoundColumn.GetItemProperty(dataItem, bound.BindingPath);
             if (prop != null)
             {
                 var v = prop.GetValue(dataItem);

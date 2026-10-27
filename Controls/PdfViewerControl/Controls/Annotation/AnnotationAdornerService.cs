@@ -125,6 +125,9 @@ internal static class AnnotationAdornerService
 
 internal sealed class AnnotationOverlay : Canvas
 {
+    private readonly Border _focusShadow;
+    private readonly Rectangle _focusFrame;
+    private const double FocusGap = 18;
     private readonly Border _selBorder;
     private readonly Ellipse[] _handles = new Ellipse[8];
     private const double HandleDiameter = 12;
@@ -134,6 +137,27 @@ internal sealed class AnnotationOverlay : Canvas
     public AnnotationOverlay()
     {
         IsHitTestVisible = false; Background = Brushes.Transparent; ClipToBounds = false;
+        // Selection-only chrome stays outside the annotation and never intercepts input.
+        _focusShadow = new Border
+        {
+            Background = Brushes.Transparent,
+            CornerRadius = new CornerRadius(5),
+            BoxShadow = BoxShadows.Parse("0 3 12 2 #48000000"),
+            IsHitTestVisible = false,
+            IsVisible = false
+        };
+        _focusFrame = new Rectangle
+        {
+            Stroke = new SolidColorBrush(Color.Parse("#FF747474")),
+            StrokeThickness = 1.5,
+            RadiusX = 5,
+            RadiusY = 5,
+            Fill = new SolidColorBrush(Color.Parse("#144A83C4")),
+            IsHitTestVisible = false,
+            IsVisible = false
+        };
+        Children.Add(_focusShadow);
+        Children.Add(_focusFrame);
         _selBorder = new Border
         {
             BorderBrush = new SolidColorBrush(Color.Parse("#FF4A83C4")),
@@ -164,6 +188,12 @@ internal sealed class AnnotationOverlay : Canvas
         var w = size.Width;
         var h = size.Height;
         Canvas.SetLeft(this, left); Canvas.SetTop(this, top);
+        _focusShadow.IsVisible = c.IsSelected;
+        _focusFrame.IsVisible = c.IsSelected;
+        Canvas.SetLeft(_focusShadow, -FocusGap); Canvas.SetTop(_focusShadow, -FocusGap);
+        _focusShadow.Width = w + FocusGap * 2; _focusShadow.Height = h + FocusGap * 2;
+        Canvas.SetLeft(_focusFrame, -FocusGap); Canvas.SetTop(_focusFrame, -FocusGap);
+        _focusFrame.Width = w + FocusGap * 2; _focusFrame.Height = h + FocusGap * 2;
         Canvas.SetLeft(_selBorder, -SelectionGap); Canvas.SetTop(_selBorder, -SelectionGap);
         _selBorder.Width = w + SelectionGap * 2; _selBorder.Height = h + SelectionGap * 2;
         double ho = SelectionGap + MarginOutside, r = HandleDiameter / 2;

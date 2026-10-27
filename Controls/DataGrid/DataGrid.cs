@@ -6,8 +6,10 @@ using System.Collections.Specialized;
 using System.ComponentModel;
 using System.Globalization;
 using System.Linq;
-using System.Reflection;
 using System.Threading.Tasks;
+using System.Text;
+using System.Net;
+using System.Diagnostics;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.Primitives;
@@ -48,6 +50,313 @@ public enum DataGridSelectionMode
 
 public class DataGrid : TemplatedControl
 {
+    // Change sets retain row identity and explicit accessors, never virtualized row indices.
+    private sealed record CellChange(object Item, DataGridBoundColumn.ItemProperty Property, object? Before, object? After);
+    private sealed record HistoryEntry(List<CellChange> Cells, Action? Undo = null, Action? Redo = null, object? RestoredItem = null);
+    private readonly LinkedList<HistoryEntry> _past = new();
+    private readonly Stack<HistoryEntry> _future = new();
+    private List<CellChange>? _pendingChanges;
+    private CellChange? _editingSnapshot;
+    private bool _replayingHistory;
+    private bool _canUndo;
+    private bool _canRedo;
+    private AtomButton? _undoButton;
+    private AtomButton? _redoButton;
+
+    public static readonly StyledProperty<int> UndoLimitProperty =
+        AvaloniaProperty.Register<DataGrid, int>(nameof(UndoLimit), 100, coerce: (_, value) => Math.Max(0, value));
+    public static readonly DirectProperty<DataGrid, bool> CanUndoProperty =
+        AvaloniaProperty.RegisterDirect<DataGrid, bool>(nameof(CanUndo), grid => grid.CanUndo);
+    public static readonly DirectProperty<DataGrid, bool> CanRedoProperty =
+        AvaloniaProperty.RegisterDirect<DataGrid, bool>(nameof(CanRedo), grid => grid.CanRedo);
+
+    public int UndoLimit { get => GetValue(UndoLimitProperty); set => SetValue(UndoLimitProperty, value); }
+    public bool CanUndo => _canUndo;
+    public bool CanRedo => _canRedo;
+
+    private sealed class HistoryScope(DataGrid grid) : IDisposable
+    {
+        public void Dispose()
+        {
+            var changes = grid._pendingChanges;
+            grid._pendingChanges = null;
+            if (changes is { Count: > 0 })
+                grid.PushHistory(changes);
+        }
+    }
+
+    private IDisposable BeginHistory()
+    {
+        _pendingChanges = new List<CellChange>();
+        return new HistoryScope(this);
+    }
+
+    private void RecordChange(object item, DataGridBoundColumn.ItemProperty property, object? before)
+    {
+        var after = property.GetValue(item);
+        if (_replayingHistory || Equals(before, after)) return;
+        var change = new CellChange(item, property, before, after);
+        if (_pendingChanges != null) _pendingChanges.Add(change);
+        else PushHistory(new List<CellChange> { change });
+    }
+
+    private void WriteValue(object item, DataGridBoundColumn.ItemProperty property, object? value)
+    {
+        var before = property.GetValue(item);
+        property.SetValue(item, value);
+        RecordChange(item, property, before);
+    }
+
+    private void PushHistory(List<CellChange> changes) => PushHistory(new HistoryEntry(changes));
+
+    private void PushHistory(HistoryEntry entry)
+    {
+        _future.Clear();
+        if (UndoLimit > 0) _past.AddLast(entry);
+        TrimHistory();
+    }
+
+    // The owner performs collection and domain-specific changes; they share the cell-edit timeline.
+    public void RecordUndoableAction(Action undo, Action redo, object? restoredItem = null)
+    {
+        if (_replayingHistory) return;
+        PushHistory(new HistoryEntry(new List<CellChange>(), undo, redo, restoredItem));
+    }
+
+    private void TrimHistory()
+    {
+        while (_past.Count > UndoLimit) _past.RemoveFirst();
+        if (UndoLimit == 0) _future.Clear();
+        UpdateUndoState();
+    }
+
+    private void UpdateUndoState()
+    {
+        SetAndRaise(CanUndoProperty, ref _canUndo, _past.Count > 0);
+        SetAndRaise(CanRedoProperty, ref _canRedo, _future.Count > 0);
+        if (_undoButton != null) _undoButton.IsEnabled = CanUndo && !IsReadOnly;
+        if (_redoButton != null) _redoButton.IsEnabled = CanRedo && !IsReadOnly;
+    }
+
+    public void ClearHistory()
+    {
+        _past.Clear();
+        _future.Clear();
+        UpdateUndoState();
+    }
+
+    public void Undo() => ReplayHistory(true);
+    public void Redo() => ReplayHistory(false);
+
+    private void ReplayHistory(bool undo)
+    {
+        if (IsReadOnly) return;
+        CancelEdit();
+        var entry = undo ? _past.Last?.Value : _future.Count > 0 ? _future.Peek() : null;
+        if (entry == null) return;
+        var changes = entry.Cells;
+        var appliedChanges = new List<CellChange>();
+        _replayingHistory = true;
+        try
+        {
+            // Domain actions mutate values behind our back (drag, restore); snapshot the bound
+            // columns so those edits still identify the cells they changed.
+            var beforeAction = entry.Undo != null ? SnapshotBoundValues(entry.RestoredItem) : null;
+            (undo ? entry.Undo : entry.Redo)?.Invoke();
+            InvalidateItemsCache();
+            if (beforeAction != null)
+            {
+                foreach (var (item, property, before) in beforeAction)
+                {
+                    if (FindItemIndex(item) < 0) continue;
+                    var after = property.GetValue(item);
+                    if (!Equals(before, after)) appliedChanges.Add(new CellChange(item, property, before, after));
+                }
+            }
+            foreach (var change in undo ? changes.AsEnumerable().Reverse() : changes)
+            {
+                if (FindItemIndex(change.Item) >= 0)
+                {
+                    var before = change.Property.GetValue(change.Item);
+                    change.Property.SetValue(change.Item, undo ? change.Before : change.After);
+                    if (!Equals(before, change.Property.GetValue(change.Item)))
+                        appliedChanges.Add(change);
+                }
+            }
+        }
+        catch
+        {
+            // A rejecting model setter invalidates the remaining replay assumptions.
+            ClearHistory();
+            throw;
+        }
+        finally
+        {
+            _replayingHistory = false;
+        }
+        if (undo)
+        {
+            _past.RemoveLast();
+            _future.Push(entry);
+        }
+        else
+        {
+            _future.Pop();
+            _past.AddLast(entry);
+        }
+        TrimHistory();
+        foreach (var row in _realizedRows)
+            foreach (var cell in row.Cells)
+                cell.ResetDisplay();
+        RefreshSearchResults();
+        UpdateReplaceStatus();
+        RevealHistoryChanges(appliedChanges);
+        // Queued separately: RevealHistoryChanges only drives cell selection, and the replay also
+        // queues its own scrolling, so the wash must land on cells already at their final position.
+        ScheduleHistoryFlash(entry, appliedChanges);
+        if (entry.Undo != null)
+        {
+            ClearSelectedCells();
+            ClearPendingCurrentCellRestore();
+            _currentCell = null;
+            _currentRow = null;
+            if (undo && entry.RestoredItem is { } item && FindItemIndex(item) is var index && index >= 0)
+            {
+                SelectedItem = item;
+                SelectedIndex = index;
+                ScrollIntoView(item);
+                var column = Columns.Select((value, i) => (value, i)).FirstOrDefault(pair => pair.value.IsVisible);
+                if (column.value != null) FocusCell(index, column.i);
+                else Focus();
+            }
+            else
+            {
+                SelectedIndex = SelectedItem is { } selected ? FindItemIndex(selected) : -1;
+                Focus();
+            }
+        }
+    }
+
+    private void RevealHistoryChanges(IReadOnlyList<CellChange> changes)
+    {
+        if (SelectionUnit != DataGridSelectionUnit.Cell || changes.Count == 0) return;
+
+        // Resolve after search refresh: history retains item identity, not filtered row indices.
+        var items = GetItemsList();
+        var rowIndices = new Dictionary<object, int>(ReferenceEqualityComparer.Instance);
+        for (var row = 0; row < items.Count; row++)
+            if (items[row] is { } item) rowIndices.TryAdd(item, row);
+        var selection = new HashSet<DataGridCellPosition>();
+        foreach (var change in changes)
+        {
+            if (!rowIndices.TryGetValue(change.Item, out var row)) continue;
+            for (var column = 0; column < Columns.Count; column++)
+            {
+                if (Columns[column] is DataGridBoundColumn { IsVisible: true, BindingPath: { } path } &&
+                    ReferenceEquals(DataGridBoundColumn.GetItemProperty(change.Item, path), change.Property))
+                    selection.Add(new DataGridCellPosition(row, column));
+            }
+        }
+        if (selection.Count == 0) return;
+
+        var anchor = selection.OrderBy(position => position.RowIndex).ThenBy(position => position.ColumnIndex).First();
+        ClearPendingCurrentCellRestore();
+        _currentCell = null;
+        _currentRow = null;
+        SelectedIndex = anchor.RowIndex;
+        SelectedItem = items[anchor.RowIndex];
+        EnsureRowVisible(anchor.RowIndex);
+        EnsureHistoryColumnVisible(anchor.ColumnIndex);
+        UpdateScrollBars();
+        SyncHorizontalOffset();
+        UpdateViewport();
+
+        _cellSelectionAnchor = anchor;
+        ReplaceCellSelection(selection);
+        _selectionOverlay?.SelectionChanged();
+        _currentRow = _realizedRows.FirstOrDefault(row => row.Index == anchor.RowIndex);
+        _currentCell = _currentRow?.Cells.FirstOrDefault(cell => ReferenceEquals(cell.Column, Columns[anchor.ColumnIndex]));
+        if (_currentCell != null) _currentCell.Focus();
+        else Focus();
+    }
+
+    // The wash is independent of cell selection: it also covers full-row mode, undo of a delete and
+    // undo of a moved annotation, where the change is a restored record rather than a bound value.
+    private void ScheduleHistoryFlash(HistoryEntry entry, IReadOnlyList<CellChange> changes)
+    {
+        Dispatcher.UIThread.Post(() => FlashHistoryChanges(entry, changes), DispatcherPriority.Loaded);
+    }
+
+    private void FlashHistoryChanges(HistoryEntry entry, IReadOnlyList<CellChange> changes)
+    {
+        var flashed = new HashSet<DataGridCell>();
+        foreach (var change in changes)
+        {
+            foreach (var row in _realizedRows)
+            {
+                if (!ReferenceEquals(row.DataContext, change.Item)) continue;
+                foreach (var cell in row.Cells)
+                {
+                    if (cell.Column is DataGridBoundColumn { BindingPath: { } path } &&
+                        ReferenceEquals(DataGridBoundColumn.GetItemProperty(change.Item, path), change.Property))
+                        flashed.Add(cell);
+                }
+            }
+        }
+        if (flashed.Count == 0 && entry.RestoredItem is { } restored)
+        {
+            // A restored record changes no bound value, so there is no column to point at. Mark its
+            // leftmost visible cell rather than the row: the wash identifies a cell, not a record.
+            foreach (var row in _realizedRows)
+            {
+                if (!ReferenceEquals(row.DataContext, restored)) continue;
+                var cell = row.Cells
+                    .Where(value => value.Column is DataGridBoundColumn { IsVisible: true })
+                    .OrderBy(value => value.Column!.Index)
+                    .FirstOrDefault();
+                if (cell != null) flashed.Add(cell);
+                break;
+            }
+        }
+        foreach (var cell in flashed) cell.FlashHistoryChange();
+    }
+
+    // Items touched by a domain undo action: the restored row, the selection, or both.
+    private List<(object Item, DataGridBoundColumn.ItemProperty Property, object? Before)> SnapshotBoundValues(object? item)
+    {
+        var result = new List<(object, DataGridBoundColumn.ItemProperty, object?)>();
+        var seen = new HashSet<object>(ReferenceEqualityComparer.Instance);
+        foreach (var candidate in new[] { item, SelectedItem })
+        {
+            if (candidate is null || !seen.Add(candidate)) continue;
+            foreach (var column in Columns)
+            {
+                if (column is not DataGridBoundColumn { IsVisible: true, BindingPath: { } path }) continue;
+                var property = DataGridBoundColumn.GetItemProperty(candidate, path);
+                if (property?.CanRead != true) continue;
+                result.Add((candidate, property, property.GetValue(candidate)));
+            }
+        }
+        return result;
+    }
+
+    private void EnsureHistoryColumnVisible(int columnIndex)
+    {
+        if (IsColumnFrozen(columnIndex)) return;
+        var left = GetLeftFrozenWidth() + RowDragHandleOffset;
+        var right = GetViewportWidth() - GetRightFrozenWidth();
+        if (right <= left) return;
+        var columnLeft = RowDragHandleOffset;
+        for (var column = 0; column < columnIndex; column++)
+            columnLeft += Columns[column].GetEffectiveWidth();
+        var width = Columns[columnIndex].GetEffectiveWidth();
+        var visibleLeft = columnLeft - _horizontalOffset;
+        if (visibleLeft < left || width > right - left)
+            _horizontalOffset = Math.Max(0, columnLeft - left);
+        else if (visibleLeft + width > right)
+            _horizontalOffset = Math.Max(0, columnLeft + width - right);
+    }
+
     private bool _viewportUpdateScheduled;
     private int _realizedFirstIndex = -1;
     private int _realizedLastIndex = -1;
@@ -71,8 +380,16 @@ public class DataGrid : TemplatedControl
     private bool _isCellSelectionDragging;
     private bool _cellSelectionDidDrag;
     private bool _cellSelectionAppend;
+    private HashSet<DataGridCellPosition>? _dragSelectionBase;
+    private DataGridSelectionOverlay? _selectionOverlay;
     private Point _cellSelectionStartPoint;
     private IPointer? _cellSelectionPointer;
+    private DataGridCellPosition? _lastDragSelectionTarget;
+    private DataGridCell? _lastDragSelectionCell;
+    private object? _lastDragSelectionItem;
+    private long _cellSelectionRevision;
+    private long _lastDragSelectionRevision = -1;
+    private bool _cellSelectionVisualsDirty = true;
     private bool _isEditing;
     private bool _templateApplied;
     private double _verticalOffset;
@@ -81,6 +398,9 @@ public class DataGrid : TemplatedControl
     private bool _itemsDirty = true;
     private List<object>? _cachedItems;
     private TextBlock? _statusBar;
+    private Border? _emptyState;
+    private TextBlock? _emptyTitle;
+    private AtomButton? _emptyClearButton;
     private DataGridRow? _draggedRow;
     private DataGridRow? _dragPreviewRow;
     private RowDragAnimation? _dragPreviewAnimation;
@@ -126,9 +446,11 @@ public class DataGrid : TemplatedControl
     private readonly List<ReplaceCellTarget> _replaceScope = new();
     private int _replaceCurrentIndex;
     private bool _usesExternalSearchModel;
+    private bool _synchronizingSearchText;
+    private SearchDescriptor[]? _clearedSearchDescriptors;
 
     private sealed record ReplaceCellTarget(object Item, int ColumnIndex);
-    private sealed record ReplaceMatch(ReplaceCellTarget Target, PropertyInfo Property, string Text);
+    private sealed record ReplaceMatch(ReplaceCellTarget Target, DataGridBoundColumn.ItemProperty Property, string Text);
 
     public static readonly StyledProperty<bool> IsSearchBarVisibleProperty =
         AvaloniaProperty.Register<DataGrid, bool>(nameof(IsSearchBarVisible), true);
@@ -144,6 +466,14 @@ public class DataGrid : TemplatedControl
     public SearchHighlightMode SearchHighlightMode { get => GetValue(SearchHighlightModeProperty); set => SetValue(SearchHighlightModeProperty, value); }
     public SearchModel? SearchModel { get => GetValue(SearchModelProperty); set => SetValue(SearchModelProperty, value); }
     public object? SearchBarRightContent { get => GetValue(SearchBarRightContentProperty); set => SetValue(SearchBarRightContentProperty, value); }
+
+    public static readonly StyledProperty<string?> EmptyMessageProperty =
+        AvaloniaProperty.Register<DataGrid, string?>(nameof(EmptyMessage));
+
+    public string? EmptyMessage { get => GetValue(EmptyMessageProperty); set => SetValue(EmptyMessageProperty, value); }
+
+    private bool HasActiveSearch => _searchModel?.Descriptors.Any(descriptor =>
+        !string.IsNullOrEmpty(descriptor.Query) || descriptor.AllowEmpty) == true;
 
     public static readonly StyledProperty<IEnumerable?> ItemsSourceProperty =
         AvaloniaProperty.Register<DataGrid, IEnumerable?>(nameof(ItemsSource));
@@ -295,14 +625,7 @@ public class DataGrid : TemplatedControl
             IsAllowClear = true
         };
 
-        if (_usesExternalSearchModel)
-        {
-            _searchTextBox.Bind(TextBox.TextProperty, new Binding("Query")
-            {
-                Mode = BindingMode.TwoWay,
-                UpdateSourceTrigger = UpdateSourceTrigger.PropertyChanged,
-            });
-        }
+        SynchronizeSearchText();
         _searchTextBox.TextChanged += OnSearchTextChanged;
         _searchTextBox.KeyDown += OnSearchKeyDown;
 
@@ -349,6 +672,15 @@ public class DataGrid : TemplatedControl
         searchControls.Children.Add(prevBtn);
         searchControls.Children.Add(nextBtn);
         searchControls.Children.Add(_searchCountText);
+        _undoButton = new AtomButton { Content = "撤销", Margin = new Thickness(8, 0, 2, 0), Focusable = false };
+        _redoButton = new AtomButton { Content = "重做", Margin = new Thickness(2, 0), Focusable = false };
+        ToolTip.SetTip(_undoButton, "撤销 (Ctrl+Z)");
+        ToolTip.SetTip(_redoButton, "重做 (Ctrl+Y / Ctrl+Shift+Z)");
+        _undoButton.Click += (_, _) => Undo();
+        _redoButton.Click += (_, _) => Redo();
+        searchControls.Children.Add(_undoButton);
+        searchControls.Children.Add(_redoButton);
+        UpdateUndoState();
 
         var content = new Grid
         {
@@ -371,7 +703,7 @@ public class DataGrid : TemplatedControl
             //Background = new SolidColorBrush(Color.Parse("#F5F5F5")),
             Background = new SolidColorBrush(Color.Parse("#FFFFFF")),
             BorderBrush = new SolidColorBrush(Color.Parse("#E0E0E0")),
-            BorderThickness = new Thickness(1),
+            BorderThickness = new Thickness(0),
             CornerRadius = new CornerRadius(6),
             Margin = new Thickness(0, 8, 8, 6),
             Padding = new Thickness(4, 2),
@@ -381,19 +713,58 @@ public class DataGrid : TemplatedControl
 
     private void AttachSearchModel(SearchModel searchModel)
     {
-        if (ReferenceEquals(_searchModel, searchModel)) return;
+        if (ReferenceEquals(_searchModel, searchModel))
+        {
+            SynchronizeSearchText();
+            return;
+        }
 
         if (_searchModel != null)
         {
             _searchModel.ResultsChanged -= OnSearchResultsChanged;
             _searchModel.CurrentChanged -= OnSearchCurrentChanged;
+            _searchModel.SearchChanged -= OnSearchModelChanged;
         }
         _searchAdapter?.Dispose();
+        _searchDebounceTimer?.Stop();
+        _pendingSearchQuery = null;
+        _clearedSearchDescriptors = null;
 
         _searchModel = searchModel;
         _searchAdapter = new DataGridSearchAdapter(_searchModel, this);
         _searchModel.ResultsChanged += OnSearchResultsChanged;
         _searchModel.CurrentChanged += OnSearchCurrentChanged;
+        _searchModel.SearchChanged += OnSearchModelChanged;
+        SynchronizeSearchText();
+    }
+
+    private void OnSearchModelChanged(object? sender, SearchChangedEventArgs e)
+    {
+        if (e.NewDescriptors.Count > 0)
+            _clearedSearchDescriptors = null;
+        SynchronizeSearchText();
+    }
+
+    private void SynchronizeSearchText()
+    {
+        if (_searchTextBox == null || _searchModel == null)
+            return;
+
+        var query = _searchModel.Descriptors.FirstOrDefault()?.Query ?? string.Empty;
+        if (_searchTextBox.InnerRightContent is Control clearButton)
+            clearButton.IsVisible = !string.IsNullOrWhiteSpace(query);
+        if (string.Equals(_searchTextBox.Text, query, StringComparison.Ordinal))
+            return;
+
+        _synchronizingSearchText = true;
+        try
+        {
+            _searchTextBox.Text = query;
+        }
+        finally
+        {
+            _synchronizingSearchText = false;
+        }
     }
 
     private void UpdateSearchBarVisibility()
@@ -608,7 +979,7 @@ public class DataGrid : TemplatedControl
                 string.IsNullOrWhiteSpace(boundColumn.BindingPath))
                 continue;
 
-            var property = target.Item.GetType().GetProperty(boundColumn.BindingPath);
+            var property = DataGridBoundColumn.GetItemProperty(target.Item, boundColumn.BindingPath);
             if (property?.CanRead != true || property.PropertyType == typeof(bool))
                 continue;
             var text = property.GetValue(target.Item)?.ToString();
@@ -667,6 +1038,7 @@ public class DataGrid : TemplatedControl
         var query = _replaceFindTextBox?.Text ?? string.Empty;
         var replacement = _replaceTextBox?.Text ?? string.Empty;
         var replaced = 0;
+        using var history = BeginHistory();
         foreach (var match in matches)
         {
             var updated = ReplaceText(match.Text, query, replacement, out var count);
@@ -708,13 +1080,13 @@ public class DataGrid : TemplatedControl
         return builder.ToString();
     }
 
-    private static bool TrySetBoundValue(object item, PropertyInfo property, string text)
+    private bool TrySetBoundValue(object item, DataGridBoundColumn.ItemProperty property, string text)
     {
-        if (property.CanWrite != true) return false;
+        if (IsReadOnly || property.CanWrite != true) return false;
         if (!TryConvertClipboardValue(text, property.PropertyType, out var converted))
             return false;
         if (Equals(property.GetValue(item), converted)) return false;
-        property.SetValue(item, converted);
+        WriteValue(item, property, converted);
         return true;
     }
 
@@ -736,13 +1108,41 @@ public class DataGrid : TemplatedControl
 
     private void OnSearchTextChanged(object? sender, TextChangedEventArgs e)
     {
-        if (_searchTextBox == null || _searchModel == null) return;
+        if (_searchTextBox == null || _searchModel == null || _synchronizingSearchText) return;
 
         var query = _searchTextBox.Text ?? string.Empty;
         if (_searchTextBox.InnerRightContent is Control clearButton)
             clearButton.IsVisible = !string.IsNullOrWhiteSpace(query);
 
-        if (_usesExternalSearchModel) return;
+        if (_usesExternalSearchModel)
+        {
+            if (string.IsNullOrWhiteSpace(query))
+            {
+                if (_searchModel.Descriptors.Count > 0)
+                    _clearedSearchDescriptors = _searchModel.Descriptors.ToArray();
+                _searchModel.Clear();
+                return;
+            }
+
+            var descriptors = _searchModel.Descriptors.ToArray();
+            if (descriptors.Length == 0 && _clearedSearchDescriptors is { Length: > 0 } cleared)
+            {
+                descriptors = cleared;
+            }
+
+            if (descriptors.Length == 0)
+            {
+                _searchModel.Apply(new[] { new SearchDescriptor(query) });
+                return;
+            }
+
+            var first = descriptors[0];
+            descriptors[0] = new SearchDescriptor(query, first.MatchMode, first.TermMode,
+                first.Scope, first.ColumnNames, first.Comparison, first.Culture,
+                first.WholeWord, first.NormalizeWhitespace, first.IgnoreDiacritics, first.AllowEmpty);
+            _searchModel.Apply(descriptors);
+            return;
+        }
 
         if (string.IsNullOrWhiteSpace(query))
         {
@@ -883,6 +1283,76 @@ public class DataGrid : TemplatedControl
         return r;
     }
 
+    private Border BuildEmptyState()
+    {
+        _emptyTitle = new TextBlock
+        {
+            Foreground = new SolidColorBrush(Color.Parse("#666666")),
+            HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Center,
+            TextAlignment = TextAlignment.Center,
+            TextWrapping = TextWrapping.Wrap,
+        };
+        _emptyClearButton = new AtomButton
+        {
+            Content = new StackPanel
+            {
+                Orientation = Avalonia.Layout.Orientation.Horizontal,
+                Spacing = 6,
+                Children =
+                {
+                    new Avalonia.Controls.Shapes.Path
+                    {
+                        Data = Geometry.Parse("M12.531 3H3a1 1 0 0 0-.742 1.67l7.225 7.989A2 2 0 0 1 10 14v6a1 1 0 0 0 .553.895l2 1A1 1 0 0 0 14 21v-7a2 2 0 0 1 .517-1.341l.427-.473 M16.5 3.5l5 5 M21.5 3.5l-5 5"),
+                        Stroke = new SolidColorBrush(Color.Parse("#666666")),
+                        StrokeThickness = 1.75,
+                        Stretch = Stretch.Uniform,
+                        Width = 16,
+                        Height = 16,
+                        VerticalAlignment = Avalonia.Layout.VerticalAlignment.Center,
+                    },
+                    new TextBlock { Text = "清除筛选", VerticalAlignment = Avalonia.Layout.VerticalAlignment.Center },
+                },
+            },
+            HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Center,
+            Padding = new Thickness(10, 4),
+            FontSize = 12,
+        };
+        Avalonia.Automation.AutomationProperties.SetName(_emptyClearButton, "清除筛选");
+        _emptyClearButton.Click += (_, _) =>
+        {
+            _searchDebounceTimer?.Stop();
+            _pendingSearchQuery = null;
+            _searchModel?.Clear();
+            ClearAllFilters();
+            Focus();
+        };
+        return new Border
+        {
+            IsVisible = false,
+            Padding = new Thickness(24),
+            ClipToBounds = true,
+            Child = new StackPanel
+            {
+                Spacing = 12,
+                HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Center,
+                VerticalAlignment = Avalonia.Layout.VerticalAlignment.Center,
+                Children = { _emptyTitle, _emptyClearButton },
+            },
+        };
+    }
+
+    private void UpdateEmptyState()
+    {
+        var empty = GetItemCount() == 0;
+        PseudoClasses.Set(":empty", empty);
+        if (_emptyState == null || _emptyTitle == null || _emptyClearButton == null) return;
+        _emptyState.IsVisible = empty;
+        if (!empty) return;
+        var filtering = HasActiveSearch || Columns.Any(column => column.IsFiltered);
+        _emptyTitle.Text = filtering ? "没有匹配的行" : EmptyMessage ?? "暂无数据";
+        _emptyClearButton.IsVisible = filtering;
+    }
+
     private void EnsureDefaultVisualTree()
     {
         if (_templateApplied) return;
@@ -903,6 +1373,9 @@ public class DataGrid : TemplatedControl
             OwningGrid = this,
             ClipToBounds = true,
         };
+
+        _selectionOverlay = new DataGridSelectionOverlay(this) { IsHitTestVisible = false, ZIndex = 40 };
+        _scrollPanel.Children.Add(_selectionOverlay);
 
         _vScrollBar = new ScrollBar
         {
@@ -940,6 +1413,12 @@ public class DataGrid : TemplatedControl
         Grid.SetRow(_scrollPanel, 2);
         Grid.SetColumn(_scrollPanel, 0);
         root.Children.Add(_scrollPanel);
+
+        // A body sibling stays centered independently of row virtualization and scroll offsets.
+        _emptyState = BuildEmptyState();
+        Grid.SetRow(_emptyState, 2);
+        Grid.SetColumn(_emptyState, 0);
+        root.Children.Add(_emptyState);
 
         Grid.SetRow(_vScrollBar, 2);
         Grid.SetColumn(_vScrollBar, 1);
@@ -982,7 +1461,7 @@ public class DataGrid : TemplatedControl
     {
         base.OnPointerWheelChanged(e);
         double vpH = GetViewportHeight();
-        double vpW = Bounds.Width;
+        double vpW = GetViewportWidth();
         int itemCount = GetItemCount();
         double totalH = itemCount * RowHeight;
         double totalW = Columns.Sum(c => c.GetEffectiveWidth());
@@ -992,13 +1471,11 @@ public class DataGrid : TemplatedControl
         if (e.Delta.Y != 0)
             _verticalOffset = Math.Clamp(_verticalOffset - e.Delta.Y * RowHeight * 3, 0, maxV);
         if (e.Delta.X != 0)
-        {
             _horizontalOffset = Math.Clamp(_horizontalOffset - e.Delta.X * 30, 0, maxH);
-            SyncHorizontalOffset();
-        }
 
         UpdateScrollBars();
-        UpdateViewport();
+        // Coalesce rapid wheel events into one realization pass per render frame.
+        ScheduleViewportUpdate();
         e.Handled = true;
     }
 
@@ -1051,6 +1528,7 @@ public class DataGrid : TemplatedControl
         }
         foreach (var row in _realizedRows)
             row.InvalidateArrange();
+        _selectionOverlay?.InvalidateVisual();
     }
 
     private void OnVScrollBarChanged(object? sender, RoutedEventArgs e)
@@ -1077,7 +1555,8 @@ public class DataGrid : TemplatedControl
     private void OnHScrollBarChanged(object? sender, RoutedEventArgs e)
     {
         if (_updatingScrollBars) return;
-        _horizontalOffset = _hScrollBar!.Value;
+        double maxOffset = Math.Max(0, Columns.Sum(column => column.GetEffectiveWidth()) - GetViewportWidth());
+        _horizontalOffset = Math.Clamp(_hScrollBar!.Value, 0, maxOffset);
         SyncHorizontalOffset();
     }
 
@@ -1128,7 +1607,7 @@ public class DataGrid : TemplatedControl
             _verticalOffset = 0;
         }
 
-        double finalVpW = vNeeded ? GetViewportWidth() : Bounds.Width;
+        double finalVpW = GetViewportWidth();
         if (hNeeded)
         {
             _hScrollBar.Minimum = 0;
@@ -1145,6 +1624,7 @@ public class DataGrid : TemplatedControl
         }
 
         _updatingScrollBars = false;
+        SyncHorizontalOffset();
     }
 
     private void UpdateStarColumnWidths(double viewportWidth)
@@ -1194,6 +1674,8 @@ public class DataGrid : TemplatedControl
 
     private void OnColumnsChanged(object? sender, NotifyCollectionChangedEventArgs e)
     {
+        CancelEdit();
+        ClearHistory();
         _rowPool.Clear();
         for (int i = 0; i < Columns.Count; i++) { Columns[i].Index = i; Columns[i].DataGridOwner = this; }
         if (_templateApplied) { BuildHeaders(); RefreshRows(); }
@@ -1304,6 +1786,7 @@ public class DataGrid : TemplatedControl
 
     private void UpdateViewport()
     {
+        UpdateEmptyState();
         if (_scrollPanel == null || ItemsSource == null)
         {
             ClearRows();
@@ -1326,6 +1809,7 @@ public class DataGrid : TemplatedControl
                 var item = row.Index < items.Count ? items[row.Index] : null;
                 if (!ReferenceEquals(row.DataContext, item))
                 {
+                    _cellSelectionVisualsDirty = true;
                     UnsubscribeItemValidation(row.DataContext);
                     ReuseRow(row, row.Index, item);
                     SubscribeItemValidation(item);
@@ -1336,12 +1820,13 @@ public class DataGrid : TemplatedControl
                     row.IsSelected = selected;
             }
             _scrollPanel.InvalidateArrange();
-            if (SelectionUnit == DataGridSelectionUnit.Cell)
+            if (SelectionUnit == DataGridSelectionUnit.Cell && _cellSelectionVisualsDirty)
                 ApplyCellSelectionVisuals();
             RestorePendingCurrentCell();
             return;
         }
 
+        _cellSelectionVisualsDirty = true;
         var realizedByIndex = new Dictionary<int, DataGridRow>(_realizedRows.Count);
         foreach (var row in _realizedRows)
             realizedByIndex[row.Index] = row;
@@ -1359,7 +1844,7 @@ public class DataGrid : TemplatedControl
 
         for (int i = first; i <= last; i++)
         {
-            if (realizedByIndex.TryGetValue(i, out var existing) && _realizedRows.Contains(existing))
+            if (realizedByIndex.TryGetValue(i, out var existing))
             {
                 var item = i < items.Count ? items[i] : null;
                 if (!ReferenceEquals(existing.DataContext, item))
@@ -1384,7 +1869,7 @@ public class DataGrid : TemplatedControl
         _realizedFirstIndex = first;
         _realizedLastIndex = last;
         _scrollPanel.InvalidateArrange();
-        if (SelectionUnit == DataGridSelectionUnit.Cell)
+        if (SelectionUnit == DataGridSelectionUnit.Cell && _cellSelectionVisualsDirty)
             ApplyCellSelectionVisuals();
         RestorePendingCurrentCell();
     }
@@ -1512,6 +1997,7 @@ public class DataGrid : TemplatedControl
 
     private void InvalidateItemsCache()
     {
+        _selectionOverlay?.Reset();
         _itemsDirty = true;
         _cachedItems = null;
     }
@@ -1526,7 +2012,7 @@ public class DataGrid : TemplatedControl
                 var source = ItemsSource.Cast<object>();
                 foreach (var col in Columns.Where(c => c.IsFiltered))
                     source = source.Where(item => col.PassesFilter(item));
-                if (_searchModel is { Results.Count: > 0 })
+                if (HasActiveSearch && _searchModel != null)
                 {
                     var matched = new HashSet<object>(_searchModel.Results.Select(r => r.Item));
                     source = source.Where(item => matched.Contains(item));
@@ -1546,7 +2032,7 @@ public class DataGrid : TemplatedControl
         foreach (var column in Columns.Where(column => column != currentColumn && column.IsFiltered))
             source = source.Where(column.PassesFilter);
 
-        if (_searchModel is { Results.Count: > 0 })
+        if (HasActiveSearch && _searchModel != null)
         {
             var matched = new HashSet<object>(_searchModel.Results.Select(result => result.Item));
             source = source.Where(matched.Contains);
@@ -1642,7 +2128,7 @@ public class DataGrid : TemplatedControl
 
     private void OnRowPointerPressed(object? sender, PointerPressedEventArgs e)
     {
-        if (SelectionUnit == DataGridSelectionUnit.Cell)
+        if (SelectionUnit == DataGridSelectionUnit.Cell && _cellSelectionVisualsDirty)
             return;
         if (sender is not DataGridRow row) return;
         var pos = e.GetPosition(row);
@@ -2084,14 +2570,14 @@ public class DataGrid : TemplatedControl
     private static bool IsItemSelected(object? item)
     {
         if (item == null) return false;
-        var property = item.GetType().GetProperty("IsSelected");
+        var property = DataGridBoundColumn.GetItemProperty(item, "IsSelected");
         return property?.GetValue(item) is bool selected && selected;
     }
 
     private static void SetItemSelected(object? item, bool selected)
     {
         if (item == null) return;
-        var property = item.GetType().GetProperty("IsSelected");
+        var property = DataGridBoundColumn.GetItemProperty(item, "IsSelected");
         if (property?.CanWrite == true && property.PropertyType == typeof(bool))
             property.SetValue(item, selected);
     }
@@ -2166,6 +2652,7 @@ public class DataGrid : TemplatedControl
         var isCtrl = isExtended && modifiers.HasFlag(KeyModifiers.Control);
         var isShift = isExtended && modifiers.HasFlag(KeyModifiers.Shift);
         var anchor = _cellSelectionAnchor ?? position;
+        _dragSelectionBase = isCtrl ? new HashSet<DataGridCellPosition>(_selectedCells) : null;
 
         if (isShift)
         {
@@ -2192,6 +2679,13 @@ public class DataGrid : TemplatedControl
         _cellSelectionAppend = isCtrl;
         _cellSelectionStartPoint = e.GetPosition(this);
         _cellSelectionPointer = e.Pointer;
+        // Ctrl-click toggles the anchor; the first drag must still build its range.
+        _lastDragSelectionTarget = isCtrl ? null : position;
+        _lastDragSelectionCell = cell;
+        _lastDragSelectionItem = cell.DataItem;
+        _lastDragSelectionRevision = _cellSelectionRevision;
+        _selectionOverlay?.SelectionChanged();
+        Focus();
     }
 
     private void OnCellSelectionPointerMoved(object? sender, PointerEventArgs e)
@@ -2207,7 +2701,7 @@ public class DataGrid : TemplatedControl
             return;
 
         _cellSelectionDidDrag = true;
-        e.Pointer.Capture(this);
+        if (!ReferenceEquals(e.Pointer.Captured, this)) e.Pointer.Capture(this);
         var target = FindCellAtPoint(point);
         if (target?.OwningRow == null)
             return;
@@ -2218,7 +2712,20 @@ public class DataGrid : TemplatedControl
         if (targetPosition.RowIndex < 0 || targetPosition.ColumnIndex < 0)
             return;
 
+        if (_lastDragSelectionTarget == targetPosition &&
+            ReferenceEquals(_lastDragSelectionCell, target) &&
+            ReferenceEquals(_lastDragSelectionItem, target.DataItem) &&
+            _lastDragSelectionRevision == _cellSelectionRevision)
+        {
+            e.Handled = true;
+            return;
+        }
+
+        _lastDragSelectionTarget = targetPosition;
+        _lastDragSelectionCell = target;
+        _lastDragSelectionItem = target.DataItem;
         ApplyCellSelectionRange(_cellSelectionAnchor ?? targetPosition, targetPosition, append: _cellSelectionAppend);
+        _lastDragSelectionRevision = _cellSelectionRevision;
         _currentRow = target.OwningRow;
         SelectedIndex = targetPosition.RowIndex;
         SelectedItem = target.DataItem;
@@ -2238,14 +2745,22 @@ public class DataGrid : TemplatedControl
             var targetPosition = new DataGridCellPosition(
                 target.OwningRow.Index,
                 Columns.IndexOf(target.Column!));
-            if (targetPosition.RowIndex >= 0 && targetPosition.ColumnIndex >= 0)
-                ApplyCellSelectionRange(_cellSelectionAnchor ?? targetPosition, targetPosition, append: false);
+            if (targetPosition.RowIndex >= 0 && targetPosition.ColumnIndex >= 0 &&
+                (_lastDragSelectionTarget != targetPosition ||
+                 !ReferenceEquals(_lastDragSelectionCell, target) ||
+                 !ReferenceEquals(_lastDragSelectionItem, target.DataItem) ||
+                 _lastDragSelectionRevision != _cellSelectionRevision))
+                ApplyCellSelectionRange(_cellSelectionAnchor ?? targetPosition, targetPosition, append: _cellSelectionAppend);
         }
 
         var didDrag = _cellSelectionDidDrag;
         e.Pointer.Capture(null);
         _cellSelectionPointer = null;
         _cellSelectionAppend = false;
+        _dragSelectionBase = null;
+        _lastDragSelectionTarget = null;
+        _lastDragSelectionCell = null;
+        _lastDragSelectionItem = null;
         _isCellSelectionDragging = false;
         _cellSelectionDidDrag = false;
         if (didDrag)
@@ -2289,16 +2804,25 @@ public class DataGrid : TemplatedControl
     {
         ApplyCellSelectionRange(anchor, target, append);
         _cellSelectionAnchor = anchor;
+        _selectionOverlay?.SelectionChanged();
     }
 
     public void ClearSelectedCells()
     {
         if (_selectedCells.Count == 0)
             return;
+        _cellSelectionRevision++;
         _selectedCells.Clear();
         ApplyCellSelectionVisuals();
+        _selectionOverlay?.SelectionChanged();
         SelectedCellsChanged?.Invoke(this, EventArgs.Empty);
     }
+
+    private static readonly DataFormat<byte[]> HtmlClipboardFormat = DataFormat.CreateBytesPlatformFormat(
+        OperatingSystem.IsWindows() ? "HTML Format" : OperatingSystem.IsMacOS() ? "public.html" : "text/html");
+
+    internal DataGridCellPosition? ActiveSelectionCell => _cellSelectionAnchor;
+    internal IEnumerable<DataGridCell> RealizedCells => _realizedRows.SelectMany(row => row.Cells);
 
     private async Task CopySelectedCellsAsync()
     {
@@ -2311,7 +2835,9 @@ public class DataGrid : TemplatedControl
         var minColumn = _selectedCells.Min(position => position.ColumnIndex);
         var maxColumn = _selectedCells.Max(position => position.ColumnIndex);
         var items = GetItemsList();
-        var lines = new List<string>(maxRow - minRow + 1);
+        var matrix = new List<IReadOnlyList<string>>(maxRow - minRow + 1);
+        var copiedSelection = new HashSet<DataGridCellPosition>(_selectedCells);
+        var source = ItemsSource;
 
         for (var rowIndex = minRow; rowIndex <= maxRow; rowIndex++)
         {
@@ -2328,10 +2854,32 @@ public class DataGrid : TemplatedControl
 
                 values.Add(GetCellClipboardText(items[rowIndex], Columns[columnIndex]));
             }
-            lines.Add(string.Join("\t", values));
+            matrix.Add(values);
         }
 
-        await clipboard.SetTextAsync(string.Join(Environment.NewLine, lines));
+        var tsv = DataGridClipboardText.ToTsv(matrix);
+        try
+        {
+            try
+            {
+                var item = new DataTransferItem();
+                item.SetText(tsv);
+                var html = DataGridClipboardText.ToHtml(matrix);
+                item.Set(HtmlClipboardFormat, Encoding.UTF8.GetBytes(html));
+                var transfer = new DataTransfer();
+                transfer.Add(item);
+                await clipboard.SetDataAsync(transfer);
+            }
+            catch (Exception)
+            {
+                await clipboard.SetTextAsync(tsv);
+            }
+            if (ReferenceEquals(source, ItemsSource)) _selectionOverlay?.Flash(copiedSelection);
+        }
+        catch (Exception ex)
+        {
+            Debug.WriteLine($"DataGrid copy failed: {ex.Message}");
+        }
     }
 
     private async Task PasteSelectedCellsAsync()
@@ -2340,23 +2888,37 @@ public class DataGrid : TemplatedControl
         if (clipboard == null || IsReadOnly)
             return;
 
-        var text = await clipboard.TryGetTextAsync();
-        if (string.IsNullOrEmpty(text))
+        var source = ItemsSource;
+        var selection = new HashSet<DataGridCellPosition>(_selectedCells);
+        var startBeforeRead = GetClipboardStartPosition();
+        List<List<string>>? matrix = null;
+        try
+        {
+            using var data = await clipboard.TryGetDataAsync();
+            if (data != null)
+            {
+                if (data.Contains(HtmlClipboardFormat) && await data.TryGetValueAsync(HtmlClipboardFormat) is { Length: > 0 } bytes)
+                    matrix = DataGridClipboardText.ParseHtml(Encoding.UTF8.GetString(bytes));
+                if (matrix == null && await data.TryGetTextAsync() is { Length: > 0 } text)
+                    matrix = DataGridClipboardText.ParseTsv(text);
+            }
+        }
+        catch (Exception ex)
+        {
+            Debug.WriteLine($"DataGrid paste failed: {ex.Message}");
             return;
-
-        var start = GetClipboardStartPosition();
-        if (start == null)
-            return;
-
-        var normalizedText = text.Replace("\r\n", "\n").Replace('\r', '\n');
-        if (normalizedText.EndsWith('\n'))
-            normalizedText = normalizedText[..^1];
-        var sourceRows = normalizedText
-            .Split('\n')
-            .Select(row => row.Split('\t'))
-            .ToArray();
+        }
+        if (matrix is not { Count: > 0 } || !ReferenceEquals(source, ItemsSource) ||
+            !selection.SetEquals(_selectedCells) || startBeforeRead != GetClipboardStartPosition()) return;
+        var start = startBeforeRead;
+        if (start == null) return;
+        var sourceRows = matrix.Select(row => row.ToArray()).ToArray();
         var sourceColumnCount = sourceRows.Max(row => row.Length);
-        var fillSelection = _selectedCells.Count > 1;
+        if (sourceColumnCount == 0) return;
+        var selectionRows = _selectedCells.Count > 0 ? _selectedCells.Max(p => p.RowIndex) - start.Value.RowIndex + 1 : 1;
+        var selectionColumns = _selectedCells.Count > 0 ? _selectedCells.Max(p => p.ColumnIndex) - start.Value.ColumnIndex + 1 : 1;
+        var fillSelection = (selectionRows > sourceRows.Length || selectionColumns > sourceColumnCount) &&
+            selectionRows % sourceRows.Length == 0 && selectionColumns % sourceColumnCount == 0;
         var targetRowCount = fillSelection
             ? _selectedCells.Max(position => position.RowIndex) - start.Value.RowIndex + 1
             : sourceRows.Length;
@@ -2364,6 +2926,8 @@ public class DataGrid : TemplatedControl
             ? _selectedCells.Max(position => position.ColumnIndex) - start.Value.ColumnIndex + 1
             : sourceColumnCount;
         var items = GetItemsList();
+        if (IsReadOnly || _isEditing) return;
+        using var history = BeginHistory();
         var changedPositions = new List<DataGridCellPosition>();
 
         for (var rowOffset = 0; rowOffset < targetRowCount; rowOffset++)
@@ -2386,7 +2950,7 @@ public class DataGrid : TemplatedControl
                     string.IsNullOrWhiteSpace(boundColumn.BindingPath))
                     continue;
 
-                var property = item.GetType().GetProperty(boundColumn.BindingPath);
+                var property = DataGridBoundColumn.GetItemProperty(item, boundColumn.BindingPath);
                 var sourceColumnIndex = columnOffset % sourceColumnCount;
                 var clipboardValue = sourceColumnIndex < sourceValues.Length
                     ? sourceValues[sourceColumnIndex]
@@ -2398,7 +2962,7 @@ public class DataGrid : TemplatedControl
                 if (Equals(property.GetValue(item), convertedValue))
                     continue;
 
-                property.SetValue(item, convertedValue);
+                WriteValue(item, property, convertedValue);
                 changedPositions.Add(position);
             }
         }
@@ -2410,6 +2974,34 @@ public class DataGrid : TemplatedControl
                 .SelectMany(row => row.Cells)
                 .FirstOrDefault(cell => Columns.IndexOf(cell.Column!) == position.ColumnIndex);
             cell?.ResetDisplay();
+        }
+        var target = new DataGridCellPosition(
+            Math.Min(items.Count - 1, start.Value.RowIndex + targetRowCount - 1),
+            Math.Min(Columns.Count - 1, start.Value.ColumnIndex + targetColumnCount - 1));
+        // Search refresh resets the overlay and can change displayed row indices.
+        // Keep the pasted rows by identity, then select and flash their new positions.
+        var pastedRows = new List<object>();
+        for (var row = start.Value.RowIndex; row <= target.RowIndex; row++)
+            if (items[row] is { } item) pastedRows.Add(item);
+        RefreshSearchResults();
+        UpdateReplaceStatus();
+        var refreshedItems = GetItemsList();
+        var rowIndices = new Dictionary<object, int>(ReferenceEqualityComparer.Instance);
+        for (var row = 0; row < refreshedItems.Count; row++)
+            if (refreshedItems[row] is { } item) rowIndices.TryAdd(item, row);
+        var pastedSelection = new HashSet<DataGridCellPosition>();
+        foreach (var item in pastedRows)
+        {
+            if (!rowIndices.TryGetValue(item, out var row)) continue;
+            for (var column = start.Value.ColumnIndex; column <= target.ColumnIndex; column++)
+                pastedSelection.Add(new DataGridCellPosition(row, column));
+        }
+        if (pastedSelection.Count > 0)
+        {
+            _cellSelectionAnchor = pastedSelection.OrderBy(p => p.RowIndex).ThenBy(p => p.ColumnIndex).First();
+            ReplaceCellSelection(pastedSelection);
+            _selectionOverlay?.SelectionChanged();
+            _selectionOverlay?.Flash(pastedSelection);
         }
     }
 
@@ -2438,7 +3030,7 @@ public class DataGrid : TemplatedControl
             string.IsNullOrWhiteSpace(boundColumn.BindingPath))
             return string.Empty;
 
-        return item.GetType().GetProperty(boundColumn.BindingPath)?.GetValue(item)?.ToString() ?? string.Empty;
+        return DataGridBoundColumn.GetItemProperty(item, boundColumn.BindingPath)?.GetValue(item)?.ToString() ?? string.Empty;
     }
 
     private static bool TryConvertClipboardValue(string text, Type targetType, out object? convertedValue)
@@ -2491,7 +3083,7 @@ public class DataGrid : TemplatedControl
         var minColumn = Math.Min(anchor.ColumnIndex, target.ColumnIndex);
         var maxColumn = Math.Max(anchor.ColumnIndex, target.ColumnIndex);
         var next = append
-            ? new HashSet<DataGridCellPosition>(_selectedCells)
+            ? new HashSet<DataGridCellPosition>(_isCellSelectionDragging && _dragSelectionBase != null ? _dragSelectionBase : _selectedCells)
             : new HashSet<DataGridCellPosition>();
 
         for (var row = minRow; row <= maxRow; row++)
@@ -2506,29 +3098,30 @@ public class DataGrid : TemplatedControl
     {
         if (_selectedCells.SetEquals(next))
             return;
+        _cellSelectionRevision++;
         _selectedCells.Clear();
         _selectedCells.UnionWith(next);
         ApplyCellSelectionVisuals();
+        _selectionOverlay?.SelectionChanged();
         SelectedCellsChanged?.Invoke(this, EventArgs.Empty);
     }
 
     private void ApplyCellSelectionVisuals()
     {
+        
+
+
         foreach (var row in _realizedRows)
         {
             foreach (var cell in row.Cells)
             {
-                var position = new DataGridCellPosition(row.Index, Columns.IndexOf(cell.Column!));
-                cell.IsSelected = SelectionUnit == DataGridSelectionUnit.Cell && _selectedCells.Contains(position);
+                cell.IsSelected = SelectionUnit == DataGridSelectionUnit.Cell && cell.Column != null &&
+                    _selectedCells.Contains(new DataGridCellPosition(row.Index, cell.Column.Index));
             }
         }
 
-        // Recalculate every selected cell after all neighboring selection states are current.
-        foreach (var row in _realizedRows)
-        {
-            foreach (var cell in row.Cells)
-                cell.UpdateBg();
-        }
+        _cellSelectionVisualsDirty = false;
+        // Cell selection borders are drawn by the overlay, not neighboring cells.
     }
 
     internal Thickness GetCellSelectionBorderThickness(DataGridCell cell)
@@ -2559,7 +3152,7 @@ public class DataGrid : TemplatedControl
 
     public void BeginEdit(DataGridCell cell)
     {
-        if (cell.Column?.IsReadOnly == true || cell.DataItem == null || _isEditing)
+        if (IsReadOnly || cell.Column?.IsReadOnly == true || cell.DataItem == null || _isEditing)
         {
             return;
         }
@@ -2567,7 +3160,13 @@ public class DataGrid : TemplatedControl
         _isEditing = true;
         ClearPendingCurrentCellRestore();
         _currentCell = cell;
+        _editingSnapshot = null;
+        if (cell.Column is DataGridBoundColumn bound && !string.IsNullOrWhiteSpace(bound.BindingPath) &&
+            DataGridBoundColumn.GetItemProperty(cell.DataItem, bound.BindingPath) is { CanWrite: true } property)
+            _editingSnapshot = new CellChange(cell.DataItem, property, property.GetValue(cell.DataItem), null);
         cell.BeginEdit();
+        _isEditing = cell.IsEditing;
+        if (!_isEditing) _editingSnapshot = null;
         if (cell.Column != null && cell.OwningRow != null && cell.ContentControl != null)
         {
             RaiseEvent(new DataGridPreparingCellForEditEventArgs(
@@ -2613,6 +3212,12 @@ public class DataGrid : TemplatedControl
         _isEditing = false;
         var value = cell.CommitEdit();
         CommitCellValue(cell, value);
+        if (_editingSnapshot is { } snapshot)
+        {
+            _editingSnapshot = null;
+            RecordChange(snapshot.Item, snapshot.Property, snapshot.Before);
+        }
+        cell.ResetDisplay();
         SetCurrentCell(cell);
     }
 
@@ -2628,7 +3233,7 @@ public class DataGrid : TemplatedControl
             || string.IsNullOrWhiteSpace(boundColumn.BindingPath))
             return;
 
-        var property = cell.DataItem.GetType().GetProperty(boundColumn.BindingPath);
+        var property = DataGridBoundColumn.GetItemProperty(cell.DataItem, boundColumn.BindingPath);
         if (property?.CanWrite != true)
             return;
 
@@ -2653,6 +3258,8 @@ public class DataGrid : TemplatedControl
 
     private void ClearSelectedCellValues()
     {
+        if (IsReadOnly) return;
+        using var history = BeginHistory();
         var items = GetItemsList();
         foreach (var position in _selectedCells)
         {
@@ -2666,7 +3273,7 @@ public class DataGrid : TemplatedControl
                 string.IsNullOrWhiteSpace(boundColumn.BindingPath))
                 continue;
 
-            var property = item.GetType().GetProperty(boundColumn.BindingPath);
+            var property = DataGridBoundColumn.GetItemProperty(item, boundColumn.BindingPath);
             if (property?.CanWrite != true)
                 continue;
 
@@ -2674,7 +3281,7 @@ public class DataGrid : TemplatedControl
             if (Equals(property.GetValue(item), clearedValue))
                 continue;
 
-            property.SetValue(item, clearedValue);
+            WriteValue(item, property, clearedValue);
 
             var realizedCell = _realizedRows
                 .Where(row => row.Index == position.RowIndex)
@@ -2688,9 +3295,8 @@ public class DataGrid : TemplatedControl
     {
         if (targetType == typeof(string))
             return string.Empty;
-        if (!targetType.IsValueType || Nullable.GetUnderlyingType(targetType) != null)
-            return null;
-        return Activator.CreateInstance(targetType);
+        // PropertyInfo.SetValue maps null to default(T) for non-nullable value types.
+        return null;
     }
 
     private static object? ConvertCellValue(object? value, Type targetType)
@@ -2735,6 +3341,12 @@ public class DataGrid : TemplatedControl
         CellEditEnding?.Invoke(this, args);
         _currentCell.CancelEdit();
         _isEditing = false;
+        if (_editingSnapshot is { } snapshot)
+        {
+            _editingSnapshot = null;
+            snapshot.Property.SetValue(snapshot.Item, snapshot.Before);
+            _currentCell.ResetDisplay();
+        }
     }
 
     protected override void OnKeyDown(KeyEventArgs e)
@@ -2748,6 +3360,14 @@ public class DataGrid : TemplatedControl
             if (e.Key == Key.Escape) { CancelEdit(); e.Handled = true; }
             else if (e.Key == Key.Enter) { CommitEdit(); Navigate(0, 1); e.Handled = true; }
             else if (e.Key == Key.Tab) { CommitEdit(); Navigate(e.KeyModifiers.HasFlag(KeyModifiers.Shift) ? -1 : 1, 0); e.Handled = true; }
+            return;
+        }
+        if (!e.Handled && e.KeyModifiers.HasFlag(KeyModifiers.Control) &&
+            e.Key is Key.Z or Key.Y && (ReferenceEquals(e.Source, this) || ReferenceEquals(e.Source, _currentCell)))
+        {
+            if (e.Key == Key.Y || e.KeyModifiers.HasFlag(KeyModifiers.Shift)) Redo();
+            else Undo();
+            e.Handled = true;
             return;
         }
         switch (e.Key)
@@ -2846,6 +3466,7 @@ public class DataGrid : TemplatedControl
             var position = new DataGridCellPosition(cell.OwningRow.Index, Columns.IndexOf(cell.Column));
             ApplyCellSelectionRange(position, position, append: false);
             _cellSelectionAnchor = position;
+            _selectionOverlay?.SelectionChanged();
         }
         else
         {
@@ -2913,6 +3534,7 @@ public class DataGrid : TemplatedControl
         SubscribeCollectionChanged();
         ClearSelectedCells();
         _cellSelectionAnchor = null;
+            _cellSelectionVisualsDirty = true;
         InvalidateItemsCache();
         UpdateStatusBar();
         UpdateViewport();
@@ -2972,11 +3594,22 @@ public class DataGrid : TemplatedControl
     protected override void OnPropertyChanged(AvaloniaPropertyChangedEventArgs change)
     {
         base.OnPropertyChanged(change);
-        if (change.Property == ItemsSourceProperty) { InvalidateItemsCache(); UpdateStatusBar(); RefreshRows(); }
+        if (change.Property == ItemsSourceProperty)
+        {
+            CancelEdit();
+            ClearHistory();
+            InvalidateItemsCache();
+            UpdateStatusBar();
+            RefreshRows();
+        }
+        else if (change.Property == EmptyMessageProperty) UpdateEmptyState();
+        else if (change.Property == UndoLimitProperty) TrimHistory();
+        else if (change.Property == IsReadOnlyProperty) UpdateUndoState();
         else if (change.Property == SearchModelProperty)
         {
             _usesExternalSearchModel = SearchModel != null;
             AttachSearchModel(SearchModel ?? new SearchModel { HighlightMode = SearchHighlightMode });
+            _searchAdapter?.RefreshResults();
         }
         else if (change.Property == IsSearchBarVisibleProperty)
         {
@@ -2986,11 +3619,13 @@ public class DataGrid : TemplatedControl
         {
             ClearSelectedCells();
             _cellSelectionAnchor = null;
+            _cellSelectionVisualsDirty = true;
             UpdateViewport();
         }
         else if (change.Property == SelectionModeProperty)
         {
             _cellSelectionAnchor = null;
+            _cellSelectionVisualsDirty = true;
         }
         else if (change.Property == SelectedIndexProperty) UpdateViewport();
         else if (change.Property == GridLinesVisibilityProperty)
@@ -3162,6 +3797,364 @@ public class DataGrid : TemplatedControl
     #endregion
 }
 
+// A single non-interactive layer keeps the wash above cell content and below editors/popups.
+internal sealed class DataGridSelectionOverlay : Control
+{
+    private readonly DataGrid _grid;
+    private readonly DispatcherTimer _timer;
+    private readonly Stopwatch _clock = Stopwatch.StartNew();
+    private HashSet<DataGridCellPosition> _flash = new();
+    private double _flashStart = -1000;
+    private readonly Dictionary<int, SelectionSpring> _ranges = new();
+    private SelectionSpring? _active;
+    private int _activeRegion;
+    private bool _selectionCacheDirty;
+    private bool _selectionCacheInitialized;
+    private bool _hasSelectedCells;
+    private bool _selectionIsRectangular;
+    private int _minSelectedRow;
+    private int _maxSelectedRow;
+    private int _minSelectedColumn;
+    private int _maxSelectedColumn;
+
+    // Arc Snappy: visualDuration = 0.26s, bounce = 0.12. Retarget from the
+    // current position AND velocity, including when input arrives between frames.
+    private sealed class SelectionSpring
+    {
+        private readonly double[] _value = new double[4];
+        private readonly double[] _velocity = new double[4];
+        private readonly double[] _target = new double[4];
+        private double _time;
+        public bool IsMoving { get; private set; }
+        public Rect Value => new(_value[0], _value[1], Math.Max(0, _value[2]), Math.Max(0, _value[3]));
+
+        public SelectionSpring(Rect rect, double now)
+        {
+            _value[0] = _target[0] = rect.X;
+            _value[1] = _target[1] = rect.Y;
+            _value[2] = _target[2] = rect.Width;
+            _value[3] = _target[3] = rect.Height;
+            _time = now;
+        }
+
+        public void Update(Rect target, double now)
+        {
+            Advance(now);
+            if (_target[0] == target.X && _target[1] == target.Y &&
+                _target[2] == target.Width && _target[3] == target.Height) return;
+            _target[0] = target.X;
+            _target[1] = target.Y;
+            _target[2] = target.Width;
+            _target[3] = target.Height;
+            IsMoving = true;
+        }
+
+        private void Advance(double now)
+        {
+            var dt = Math.Max(0, (now - _time) / 1000);
+            _time = now;
+            if (!IsMoving) return;
+            var frequency = 2 * Math.PI / (1.2 * 0.26);
+            var decay = 0.88 * frequency;
+            var damped = frequency * Math.Sqrt(1 - 0.88 * 0.88);
+            var exp = Math.Exp(-decay * dt);
+            var cos = Math.Cos(damped * dt);
+            var sin = Math.Sin(damped * dt);
+            var moving = false;
+            for (var i = 0; i < 4; i++)
+            {
+                var x = _value[i] - _target[i];
+                var b = (_velocity[i] + decay * x) / damped;
+                var displacement = exp * (x * cos + b * sin);
+                _velocity[i] = exp * ((b * damped - decay * x) * cos - (x * damped + decay * b) * sin);
+                _value[i] = _target[i] + displacement;
+                moving |= Math.Abs(displacement) > 0.005 || Math.Abs(_velocity[i]) > 0.01;
+            }
+            IsMoving = moving;
+            if (!moving)
+            {
+                Array.Copy(_target, _value, 4);
+                Array.Clear(_velocity);
+            }
+        }
+    }
+    // Arc's neutral accent with 9% selection fill and 14% blue history feedback.
+    private const double FlashFadeInMilliseconds = 120;
+    private const double FlashDurationMilliseconds = 900;
+    private static readonly IBrush Accent = new SolidColorBrush(Color.Parse("#353535"));
+    private static readonly IBrush SelectionFill = new SolidColorBrush(Color.Parse("#17353535"));
+    private static readonly IBrush WashFill = new SolidColorBrush(Color.Parse("#240078D4"));
+    private static readonly Pen SelectionPen = new(Accent, 1);
+    private static readonly Pen ActivePen = new(Accent, 2);
+    private static readonly Avalonia.Animation.Easings.SplineEasing WashEasing = new(0, 0, 0.58, 1);
+
+    public DataGridSelectionOverlay(DataGrid grid)
+    {
+        _grid = grid;
+        ClipToBounds = true;
+        _timer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(16) };
+        _timer.Tick += (_, _) =>
+        {
+            InvalidateVisual();
+            var flashExpired = _clock.Elapsed.TotalMilliseconds - _flashStart >= FlashDurationMilliseconds;
+            if (flashExpired) _flash.Clear();
+            if (flashExpired && !_ranges.Values.Any(range => range.IsMoving) && _active?.IsMoving != true)
+                _timer.Stop();
+        };
+    }
+
+    public void SelectionChanged()
+    {
+        // Resolve geometry during rendering, after row arrangement. Repeated
+        // notifications for the same target must not restart an in-flight spring.
+        _selectionCacheDirty = true;
+        if (TopLevel.GetTopLevel(this) != null) _timer.Start();
+        InvalidateVisual();
+    }
+
+    private void UpdateSelectionCache(IReadOnlyCollection<DataGridCellPosition> selected)
+    {
+        _selectionCacheDirty = false;
+        _selectionCacheInitialized = true;
+        _hasSelectedCells = selected.Count > 0;
+        _selectionIsRectangular = false;
+        if (!_hasSelectedCells)
+        {
+            _minSelectedRow = _maxSelectedRow = 0;
+            _minSelectedColumn = _maxSelectedColumn = 0;
+            return;
+        }
+
+        var first = true;
+        foreach (var position in selected)
+        {
+            if (first)
+            {
+                _minSelectedRow = _maxSelectedRow = position.RowIndex;
+                _minSelectedColumn = _maxSelectedColumn = position.ColumnIndex;
+                first = false;
+            }
+            else
+            {
+                _minSelectedRow = Math.Min(_minSelectedRow, position.RowIndex);
+                _maxSelectedRow = Math.Max(_maxSelectedRow, position.RowIndex);
+                _minSelectedColumn = Math.Min(_minSelectedColumn, position.ColumnIndex);
+                _maxSelectedColumn = Math.Max(_maxSelectedColumn, position.ColumnIndex);
+            }
+        }
+
+        var rowCount = (long)_maxSelectedRow - _minSelectedRow + 1;
+        var columnCount = (long)_maxSelectedColumn - _minSelectedColumn + 1;
+        _selectionIsRectangular = rowCount <= selected.Count && columnCount <= selected.Count &&
+            rowCount * columnCount == selected.Count;
+    }
+
+    private void ClearSelectionCache()
+    {
+        _selectionCacheDirty = false;
+        _selectionCacheInitialized = false;
+        _hasSelectedCells = false;
+        _selectionIsRectangular = false;
+        _minSelectedRow = _maxSelectedRow = 0;
+        _minSelectedColumn = _maxSelectedColumn = 0;
+    }
+
+    public void Flash(HashSet<DataGridCellPosition> cells)
+    {
+        _flash = cells;
+        _flashStart = _clock.Elapsed.TotalMilliseconds;
+        if (TopLevel.GetTopLevel(this) != null) _timer.Start();
+        InvalidateVisual();
+    }
+
+    protected override void OnDetachedFromVisualTree(VisualTreeAttachmentEventArgs e)
+    {
+        _timer.Stop();
+        _flash.Clear();
+        _ranges.Clear();
+        _active = null;
+        ClearSelectionCache();
+        base.OnDetachedFromVisualTree(e);
+    }
+
+    internal void Reset()
+    {
+        _timer.Stop();
+        _flash.Clear();
+        _ranges.Clear();
+        _active = null;
+        ClearSelectionCache();
+        InvalidateVisual();
+    }
+
+    public override void Render(DrawingContext context)
+    {
+        var now = _clock.Elapsed.TotalMilliseconds;
+        if (now - _flashStart >= FlashDurationMilliseconds)
+            _flash.Clear();
+        if (_grid.SelectionUnit != DataGridSelectionUnit.Cell) return;
+        var selected = _grid.SelectedCells;
+        if (_selectionCacheDirty || !_selectionCacheInitialized)
+            UpdateSelectionCache(selected);
+        if (!_hasSelectedCells && _flash.Count == 0 && _ranges.Count == 0 && _active == null)
+            return;
+        var rectangles = new Dictionary<int, Rect>();
+        var elapsed = Math.Max(0, now - _flashStart);
+        var wash = elapsed < FlashFadeInMilliseconds
+            ? WashEasing.Ease(elapsed / FlashFadeInMilliseconds)
+            : 1 - WashEasing.Ease(Math.Clamp(
+                (elapsed - FlashFadeInMilliseconds) / (FlashDurationMilliseconds - FlashFadeInMilliseconds), 0, 1));
+        Rect? active = null;
+        var activeRegion = 0;
+        // Geometry belongs to logical cells, not recycled row controls. Keep spring
+        // targets alive even while every selected row is outside the realized window.
+        var columnRects = new Dictionary<int, (double X, double Width, int Region)>();
+        var x = _grid.RowDragHandleOffset;
+        var totalWidth = _grid.Columns.Sum(column => column.GetEffectiveWidth());
+        var rightStart = Math.Max(0, _grid.Columns.Count - _grid.RightFrozenColumnCount);
+        var rightX = Math.Min(_grid.RowDragHandleOffset + totalWidth - _grid.GetRightFrozenWidth() - _grid.HorizontalOffset,
+            Math.Max(0, Bounds.Width - _grid.GetRightFrozenWidth()) + _grid.RowDragHandleOffset);
+        for (var column = 0; column < _grid.Columns.Count; column++)
+        {
+            var width = _grid.Columns[column].GetEffectiveWidth();
+            var region = column < _grid.LeftFrozenColumnCount ? 0 : column >= rightStart ? 2 : 1;
+            var bodyX = region == 0 ? x : region == 2 ? rightX : x - _grid.HorizontalOffset;
+            if (_grid.Columns[column].IsVisible) columnRects[column] = (bodyX, width, region);
+            x += width;
+            if (column >= rightStart) rightX += width;
+        }
+
+        var itemCount = _grid.GetItemCount();
+        var rowHeight = _grid.RowHeight;
+        var firstVisibleRow = 0;
+        var lastVisibleRow = -1;
+        if (itemCount > 0 && rowHeight > 0 && Bounds.Height > 0)
+        {
+            firstVisibleRow = Math.Max(0, (int)Math.Floor(_grid.VerticalOffset / rowHeight));
+            lastVisibleRow = Math.Min(itemCount - 1,
+                (int)Math.Ceiling((_grid.VerticalOffset + Bounds.Height) / rowHeight) - 1);
+        }
+
+        if (wash > 0 && firstVisibleRow <= lastVisibleRow)
+        {
+            for (var row = firstVisibleRow; row <= lastVisibleRow; row++)
+            {
+                var y = row * rowHeight - _grid.VerticalOffset;
+                foreach (var (column, geometry) in columnRects)
+                {
+                    if (!_flash.Contains(new DataGridCellPosition(row, column)))
+                        continue;
+                    var rect = new Rect(geometry.X, y, geometry.Width, rowHeight);
+                    using var clip = context.PushClip(RegionClip(geometry.Region));
+                    using var opacity = context.PushOpacity(wash);
+                    context.DrawRectangle(WashFill, null, rect);
+                }
+            }
+        }
+
+        if (_hasSelectedCells && _selectionIsRectangular && itemCount > 0 &&
+            _minSelectedRow < itemCount && _maxSelectedRow >= 0)
+        {
+            var rangeStartRow = Math.Max(0, _minSelectedRow);
+            var rangeEndRow = Math.Min(itemCount - 1, _maxSelectedRow);
+            var rangeY = rangeStartRow * rowHeight - _grid.VerticalOffset;
+            var rangeHeight = ((double)rangeEndRow - rangeStartRow + 1) * rowHeight;
+            var firstColumn = Math.Max(0, _minSelectedColumn);
+            var lastColumn = Math.Min(_grid.Columns.Count - 1, _maxSelectedColumn);
+            for (var column = firstColumn; column <= lastColumn; column++)
+            {
+                if (!columnRects.TryGetValue(column, out var geometry))
+                    continue;
+                var rect = new Rect(geometry.X, rangeY, geometry.Width, rangeHeight);
+                rectangles[geometry.Region] = rectangles.TryGetValue(geometry.Region, out var existing)
+                    ? existing.Union(rect)
+                    : rect;
+            }
+        }
+        else if (_hasSelectedCells && firstVisibleRow <= lastVisibleRow)
+        {
+            var firstColumn = Math.Max(0, _minSelectedColumn);
+            var lastColumn = Math.Min(_grid.Columns.Count - 1, _maxSelectedColumn);
+            for (var row = firstVisibleRow; row <= lastVisibleRow; row++)
+            {
+                var y = row * rowHeight - _grid.VerticalOffset;
+                for (var column = firstColumn; column <= lastColumn; column++)
+                {
+                    var position = new DataGridCellPosition(row, column);
+                    if (!selected.Contains(position) ||
+                        !columnRects.TryGetValue(column, out var geometry))
+                        continue;
+                    var rect = new Rect(geometry.X, y, geometry.Width, rowHeight);
+                    using var clip = context.PushClip(RegionClip(geometry.Region));
+                    context.DrawRectangle(_grid.IsEditing ? null : SelectionFill, SelectionPen,
+                        rect.Deflate(0.5), 2, 2);
+                }
+            }
+        }
+
+        var activePosition = _grid.ActiveSelectionCell;
+        if (activePosition is { } selectedActive && selected.Contains(selectedActive) &&
+            selectedActive.RowIndex >= 0 && selectedActive.RowIndex < itemCount &&
+            columnRects.TryGetValue(selectedActive.ColumnIndex, out var activeGeometry))
+        {
+            active = new Rect(activeGeometry.X,
+                selectedActive.RowIndex * rowHeight - _grid.VerticalOffset,
+                activeGeometry.Width, rowHeight);
+            activeRegion = activeGeometry.Region;
+        }
+
+        foreach (var region in _ranges.Keys.Where(region => !rectangles.ContainsKey(region)).ToArray())
+            _ranges.Remove(region);
+        foreach (var (region, target) in rectangles)
+        {
+            // Do not resize the animated range when virtualization realizes a different row window.
+            var content = ToContent(target, region);
+            if (!_ranges.TryGetValue(region, out var motion))
+                _ranges[region] = motion = new SelectionSpring(content, now);
+            motion.Update(content, now);
+            var rect = ToBody(motion.Value, region);
+            using var clip = context.PushClip(RegionClip(region));
+            if (rect.Width > 1 && rect.Height > 1)
+                context.DrawRectangle(_grid.IsEditing ? null : SelectionFill, SelectionPen,
+                    rect.Deflate(0.5), 2, 2);
+        }
+        if (active is { Width: > 2, Height: > 2 } activeRect)
+        {
+            var content = ToContent(activeRect, activeRegion);
+            if (_active == null || _activeRegion != activeRegion)
+                _active = new SelectionSpring(content, now);
+            _activeRegion = activeRegion;
+            _active.Update(content, now);
+            using var clip = context.PushClip(RegionClip(activeRegion));
+            context.DrawRectangle(null, ActivePen,
+                ToBody(_active.Value, activeRegion).Deflate(1), 2, 2);
+        }
+        else _active = null;
+        if (_ranges.Values.Any(range => range.IsMoving) || _active?.IsMoving == true)
+            _timer.Start();
+    }
+
+    private Rect ToContent(Rect rect, int region) => new(
+        rect.X + (region == 1 ? _grid.HorizontalOffset : region == 2 ? -Bounds.Width : 0),
+        rect.Y + _grid.VerticalOffset, rect.Width, rect.Height);
+
+    private Rect ToBody(Rect rect, int region) => new(
+        rect.X - (region == 1 ? _grid.HorizontalOffset : region == 2 ? -Bounds.Width : 0),
+        rect.Y - _grid.VerticalOffset, rect.Width, rect.Height);
+
+    private Rect RegionClip(int region)
+    {
+        var left = _grid.GetLeftFrozenWidth() + _grid.RowDragHandleOffset;
+        var right = Math.Max(left, Bounds.Width - _grid.GetRightFrozenWidth());
+        return region switch
+        {
+            0 => new Rect(0, 0, Math.Min(left, Bounds.Width), Bounds.Height),
+            2 => new Rect(right, 0, Math.Max(0, Bounds.Width - right), Bounds.Height),
+            _ => new Rect(left, 0, Math.Max(0, right - left), Bounds.Height)
+        };
+    }
+}
+
 internal class DataGridScrollPanel : Panel
 {
     internal DataGrid? OwningGrid { get; set; }
@@ -3253,6 +4246,11 @@ internal class DataGridScrollPanel : Panel
             }
         }
 
+        foreach (var overlay in Children.OfType<DataGridSelectionOverlay>())
+        {
+            overlay.Arrange(new Rect(finalSize));
+            overlay.InvalidateVisual();
+        }
         OwningGrid.ArrangeDragPreview(this, finalSize, vOff);
         OwningGrid.ArrangeRowDragFeedback(this, finalSize);
         return finalSize;
@@ -3335,6 +4333,133 @@ public sealed class DataGridRowReorderedEventArgs : EventArgs
         OldIndex = oldIndex;
         NewIndex = newIndex;
         WasAppliedToItemsSource = wasAppliedToItemsSource;
+    }
+}
+
+// Spreadsheet clipboard codec: quoted TSV plus UTF-8 HTML/CF_HTML; no reflection or external parser.
+internal static class DataGridClipboardText
+{
+    public static string ToTsv(IReadOnlyList<IReadOnlyList<string>> matrix) =>
+        string.Join("\n", matrix.Select(row => string.Join("\t", row.Select(value =>
+            value.IndexOfAny(['\t', '\r', '\n', '"']) >= 0 ? "\"" + value.Replace("\"", "\"\"") + "\"" : value))));
+
+    public static List<List<string>> ParseTsv(string text)
+    {
+        var rows = new List<List<string>>();
+        var row = new List<string>();
+        var cell = new StringBuilder();
+        var quoted = false;
+        for (var i = 0; i < text.Length; i++)
+        {
+            var ch = text[i];
+            if (quoted)
+            {
+                if (ch == '"')
+                {
+                    if (i + 1 < text.Length && text[i + 1] == '"') { cell.Append('"'); i++; }
+                    else quoted = false;
+                }
+                else cell.Append(ch);
+                continue;
+            }
+            if (ch == '"' && cell.Length == 0) quoted = true;
+            else if (ch == '\t') { row.Add(cell.ToString()); cell.Clear(); }
+            else if (ch is '\n' or '\r')
+            {
+                if (ch == '\r' && i + 1 < text.Length && text[i + 1] == '\n') i++;
+                row.Add(cell.ToString()); cell.Clear(); rows.Add(row); row = new List<string>();
+            }
+            else cell.Append(ch);
+        }
+        if (row.Count > 0 || cell.Length > 0 || rows.Count == 0 || text.EndsWith('\t') || text.EndsWith('"'))
+        { row.Add(cell.ToString()); rows.Add(row); }
+        return rows;
+    }
+
+    public static string ToHtml(IReadOnlyList<IReadOnlyList<string>> matrix)
+    {
+        var fragment = "<meta charset=\"utf-8\"><table><tbody>" + string.Concat(matrix.Select(row =>
+            "<tr>" + string.Concat(row.Select(cell => "<td style=\"white-space:pre-wrap\">" + WebUtility.HtmlEncode(cell)
+                .Replace("\r\n", "\n").Replace('\r', '\n').Replace("\n", "<br>") + "</td>")) + "</tr>")) + "</tbody></table>";
+        if (!OperatingSystem.IsWindows()) return fragment;
+        const string header = "Version:0.9\r\nStartHTML:{0:D10}\r\nEndHTML:{1:D10}\r\nStartFragment:{2:D10}\r\nEndFragment:{3:D10}\r\n";
+        const string prefix = "<html><body><!--StartFragment-->";
+        const string suffix = "<!--EndFragment--></body></html>";
+        var start = Encoding.UTF8.GetByteCount(string.Format(CultureInfo.InvariantCulture, header, 0, 0, 0, 0));
+        var begin = start + Encoding.UTF8.GetByteCount(prefix);
+        var end = begin + Encoding.UTF8.GetByteCount(fragment);
+        return string.Format(CultureInfo.InvariantCulture, header, start, end + Encoding.UTF8.GetByteCount(suffix), begin, end) + prefix + fragment + suffix;
+    }
+
+    public static List<List<string>>? ParseHtml(string html)
+    {
+        // A bounded, non-executing tokenizer: ignore markup, preserve cell text and explicit line breaks.
+        var rows = new List<List<string>>();
+        List<string>? row = null;
+        StringBuilder? cell = null;
+        var depth = 0;
+        var span = 1;
+        for (var i = html.IndexOf("<table", StringComparison.OrdinalIgnoreCase); i >= 0 && i < html.Length;)
+        {
+            if (html[i] != '<')
+            {
+                var end = html.IndexOf('<', i);
+                if (end < 0) end = html.Length;
+                cell?.Append(WebUtility.HtmlDecode(html[i..end]));
+                i = end; continue;
+            }
+            if (html.AsSpan(i).StartsWith("<!--"))
+            {
+                var end = html.IndexOf("-->", i + 4, StringComparison.Ordinal);
+                i = end < 0 ? html.Length : end + 3; continue;
+            }
+            var close = html.IndexOf('>', i + 1);
+            if (close < 0) break;
+            var tag = html[(i + 1)..close].Trim();
+            var closing = tag.StartsWith('/');
+            var name = tag.TrimStart('/').Split([' ', '\t', '\r', '\n', '/'], StringSplitOptions.RemoveEmptyEntries).FirstOrDefault()?.ToLowerInvariant();
+            i = close + 1;
+            if (name is "script" or "style" && !closing)
+            {
+                var end = html.IndexOf("</" + name, i, StringComparison.OrdinalIgnoreCase);
+                i = end < 0 ? html.Length : end; continue;
+            }
+            if (name == "table")
+            {
+                depth += closing ? -1 : 1;
+                if (depth == 0) break;
+            }
+            if (depth != 1) continue;
+            if (name is "td" or "th" or "tr")
+            {
+                if (cell != null && row != null)
+                {
+                    row.Add(cell.ToString());
+                    for (var c = 1; c < span; c++) row.Add(string.Empty);
+                    cell = null;
+                }
+                if (name == "tr")
+                {
+                    if (row != null) rows.Add(row);
+                    row = closing ? null : new List<string>();
+                }
+                else if (!closing)
+                {
+                    row ??= new List<string>(); cell = new StringBuilder(); span = 1;
+                    var at = tag.IndexOf("colspan", StringComparison.OrdinalIgnoreCase);
+                    if (at >= 0)
+                    {
+                        var value = tag[(at + 7)..].TrimStart(' ', '=', '\'', '"');
+                        var digits = new string(value.TakeWhile(char.IsAsciiDigit).ToArray());
+                        if (int.TryParse(digits, out var count)) span = Math.Clamp(count, 1, 1000);
+                    }
+                }
+            }
+            else if (name == "br") cell?.Append('\n');
+        }
+        if (cell != null && row != null) row.Add(cell.ToString());
+        if (row != null) rows.Add(row);
+        return rows.Count > 0 ? rows : null;
     }
 }
 

@@ -172,34 +172,36 @@ public class DataGridRow : Control
         _dragHandle.ZIndex = 100;
         _dragHandle.Arrange(new Rect(0, 0, grid.RowDragHandleOffset, finalSize.Height));
 
+        // Cells are created in the same middle/left/right order as the layout bands.
+        // Advance each band once instead of summing all preceding columns per cell.
+        var leftX = 0d;
+        var middleX = leftFrozenW - hOff;
+        var rightX = scrollableEnd;
+        var rightStart = totalCount - rightFrozen;
         foreach (var cell in _cells)
         {
             var col = cell.Column;
             if (col == null) continue;
-            int colIdx = columns.IndexOf(col);
-            double w = col.GetEffectiveWidth();
-
+            var colIdx = col.Index;
+            var width = col.GetEffectiveWidth();
             double cellX;
             if (colIdx < leftFrozen)
             {
-                double pos = 0;
-                for (int i = 0; i < colIdx; i++) pos += columns[i].GetEffectiveWidth();
-                cellX = pos;
+                cellX = leftX;
+                leftX += width;
             }
-            else if (colIdx >= totalCount - rightFrozen)
+            else if (colIdx >= rightStart)
             {
-                double pos = scrollableEnd;
-                for (int i = totalCount - rightFrozen; i < colIdx; i++) pos += columns[i].GetEffectiveWidth();
-                cellX = pos;
+                cellX = rightX;
+                rightX += width;
             }
             else
             {
-                double pos = leftFrozenW;
-                for (int i = leftFrozen; i < colIdx; i++) pos += columns[i].GetEffectiveWidth();
-                cellX = pos - hOff;
+                cellX = middleX;
+                middleX += width;
             }
 
-            cell.Arrange(new Rect(cellX + grid.RowDragHandleOffset, 0, w, finalSize.Height));
+            cell.Arrange(new Rect(cellX + grid.RowDragHandleOffset, 0, width, finalSize.Height));
         }
 
         ClipToBounds = (leftFrozen > 0 || rightFrozen > 0);

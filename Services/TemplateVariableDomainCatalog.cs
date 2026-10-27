@@ -4,7 +4,7 @@ using AcrfAnnotationTool.Services.Interface;
 
 namespace AcrfAnnotationTool.Services;
 
-public sealed class TemplateVariableDomainCatalog
+public sealed partial class TemplateVariableDomainCatalog
 {
     private readonly IDatabaseService _databaseService;
     private readonly Task<FrozenDictionary<string, string>> _loadTask;
@@ -17,9 +17,8 @@ public sealed class TemplateVariableDomainCatalog
 
     public Task<FrozenDictionary<string, string>> LoadingTask => _loadTask;
 
-    private static readonly Regex SupplementalQualifierPattern = new(
-        @"\bin\s+SUPP(?<domain>[A-Za-z0-9]+)\b",
-        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    [GeneratedRegex(@"\bin\s+SUPP(?<domain>[A-Za-z0-9]+)\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
+    private static partial Regex SupplementalQualifierRegex();
 
     public async Task<string?> FindDomainAsync(string? annotationText, string? variableName = null)
     {
@@ -70,7 +69,7 @@ public sealed class TemplateVariableDomainCatalog
         if (string.IsNullOrWhiteSpace(annotationText))
             return false;
 
-        var match = SupplementalQualifierPattern.Match(annotationText);
+        var match = SupplementalQualifierRegex().Match(annotationText);
         if (!match.Success)
             return false;
 

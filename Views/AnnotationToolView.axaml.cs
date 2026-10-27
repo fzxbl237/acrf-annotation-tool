@@ -8,11 +8,11 @@ using AtomUI.Data;
 using AtomUI.Desktop.Controls;
 using AcrfAnnotationTool.Models;
 using AcrfAnnotationTool.ViewModels.Documents;
-using AtomContextMenu = AtomUI.Desktop.Controls.ContextMenu;
+using AcrfAnnotationTool.Controls.Menus;
+using AtomUI.Icons.AntDesign;
 using AtomDialog = AtomUI.Desktop.Controls.Dialog;
 using AtomDialogButtonClickedEventArgs = AtomUI.Desktop.Controls.DialogButtonClickedEventArgs;
 using AtomDialogButtonRole = AtomUI.Desktop.Controls.DialogButtonRole;
-using AtomMenuItem = AtomUI.Desktop.Controls.MenuItem;
 using PatChesDataGridRow = PatChes.Controls.DataGrid.DataGridRow;
 
 namespace AcrfAnnotationTool.Views;
@@ -76,12 +76,17 @@ public partial class AnnotationToolView : UserControl
 
         viewModel.SelectedItem = annotation;
 
-        var menu = new AtomContextMenu();
-        var deleteItem = new AtomMenuItem { Header = "删除" };
-        var copyItem = new AtomMenuItem { Header = "复制" };
-        var uppercaseItem = new AtomMenuItem { Header = "大写" };
-        var adjustXItem = new AtomMenuItem { Header = "批量调整 X" };
-        var adjustYItem = new AtomMenuItem { Header = "批量调整 Y" };
+        var menu = new MenuSurface
+        {
+            Variant = MenuSurfaceVariant.Context,
+            ClosesOnViewportChange = true,
+            FocusReturnTarget = AnnotationGrid
+        };
+        var deleteItem = new MenuEntry { Header = "删除", IsDestructive = true, Icon = new DeleteOutlined { Width = 16, Height = 16,StrokeBrush = Avalonia.Media.Brush.Parse("#FF4D4F"), Foreground = Avalonia.Media.Brush.Parse("#FF4D4F") } };
+        var copyItem = new MenuEntry { Header = "复制", Icon = new CopyOutlined { Width = 16, Height = 16 } };
+        var uppercaseItem = new MenuEntry { Header = "大写", Icon = new FontSizeOutlined { Width = 16, Height = 16 } };
+        var adjustXItem = new MenuEntry { Header = "批量调整 X", Icon = new ColumnWidthOutlined { Width = 16, Height = 16 } };
+        var adjustYItem = new MenuEntry { Header = "批量调整 Y", Icon = new ColumnHeightOutlined { Width = 16, Height = 16 } };
 
         deleteItem.Click += (_, _) => OpenDeleteConfirmationDialog(row, annotation);
         copyItem.Click += (_, _) => viewModel.CopySelectedCommand.Execute(null);
@@ -94,8 +99,7 @@ public partial class AnnotationToolView : UserControl
         menu.Items.Add(uppercaseItem);
         menu.Items.Add(adjustXItem);
         menu.Items.Add(adjustYItem);
-        menu.PlacementTarget = row;
-        menu.Open(row);
+        menu.OpenAt(row, e.GetPosition(row));
         e.Handled = true;
     }
 

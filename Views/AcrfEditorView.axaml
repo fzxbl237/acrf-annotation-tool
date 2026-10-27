@@ -6,8 +6,8 @@
     xmlns="https://github.com/avaloniaui"
     xmlns:antd-icons="https://atomui.net/icons/antdesign"
     xmlns:atom="https://atomui.net"
-    xmlns:dock="using:Dock.Avalonia.Controls"
-    xmlns:dockmodel="using:Dock.Model.Avalonia.Controls"
+    xmlns:controls="using:AcrfAnnotationTool.Controls"
+    xmlns:dock="using:Dock.Controls"
     xmlns:views="using:AcrfAnnotationTool.Views"
     xmlns:vm="using:AcrfAnnotationTool.ViewModels.Documents"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
@@ -22,30 +22,18 @@
             Margin="8,8,8,4"
             Padding="12,8">
             <StackPanel Orientation="Horizontal" Spacing="8">
-                <atom:Button
-                    ButtonType="Default"
-                    Command="{Binding OpenPdfCommand}"
-                    Content="aCRF 导入"
-                    Variant="Filled" />
-                <atom:Button
-                    ButtonType="Default"
-                    Command="{Binding ImportCommand}"
-                    Content="Spec 导入"
-                    Variant="Filled" />
-                <atom:Button
-                    ButtonType="Primary"
-                    Command="{Binding ExportCommand}"
-                    Content="Spec 导出"
-                    Variant="Filled" />
-                <atom:SplitButton
-                    Command="{Binding SavePdfCommand}"
-                    Content="另存 PDF">
-                    <atom:SplitButton.Flyout>
-                        <atom:MenuFlyout>
-                            <atom:MenuItem Command="{Binding SavePdfFlattenCommand}" Header="另存 PDF 并 Flatten" />
-                        </atom:MenuFlyout>
-                    </atom:SplitButton.Flyout>
-                </atom:SplitButton>
+                <controls:ExpandingButtonGroup Label="文件操作" DefaultExpandedItem="{Binding #ExportSpecButton}">
+                    <controls:ExpandingButtonGroupItem x:Name="OpenPdfButton" Label="aCRF 导入" DoneLabel="已导入"
+                                                       Icon="{antd-icons:AntDesignIconProvider Kind=FilePdfOutlined}" />
+                    <controls:ExpandingButtonGroupItem x:Name="ImportSpecButton" Label="Spec 导入" DoneLabel="已导入"
+                                                       Icon="{antd-icons:AntDesignIconProvider Kind=ImportOutlined}" />
+                    <controls:ExpandingButtonGroupItem x:Name="ExportSpecButton" Label="Spec 导出" DoneLabel="已导出"
+                                                       Icon="{antd-icons:AntDesignIconProvider Kind=ExportOutlined}" />
+                    <controls:ExpandingButtonGroupItem x:Name="SavePdfButton" Label="另存 PDF" DoneLabel="已保存"
+                                                       Icon="{antd-icons:AntDesignIconProvider Kind=SaveOutlined}" />
+                    <controls:ExpandingButtonGroupItem x:Name="SavePdfFlattenButton" Label="另存 PDF 并 Flatten" DoneLabel="已保存"
+                                                       Icon="{antd-icons:AntDesignIconProvider Kind=FileProtectOutlined}" />
+                </controls:ExpandingButtonGroup>
                 <atom:IconButton
                     Click="OnDomainAnnotationSettingsClick"
                     Icon="{antd-icons:AntDesignIconProvider Kind=SettingOutlined}"
@@ -69,91 +57,24 @@
             CornerRadius="10"
             Grid.Row="1"
             Margin="8,4,8,8">
-            <dock:DockControl
-                Factory="{Binding PanelFactory}"
-                InitializeFactory="True"
-                InitializeLayout="True"
-                Margin="0">
-            <dock:DockControl.Layout>
-                <dockmodel:RootDock
-                    Id="{Binding Id}"
-                    IsCollapsable="False"
-                    Title="注释面板">
-                    <ProportionalDock Orientation="Horizontal">
-                        <DocumentDock CloseButtonShowMode="Never">
-                            <Document
-                                CanClose="False"
-                                Id="Pdf"
-                                Title="PDF 预览">
-                                <Document.Content>
-                                    <views:PdfToolView DataContext="{Binding DataContext, ElementName=EditorView}" />
-                                </Document.Content>
-                            </Document>
-                        </DocumentDock>
-                        <dockmodel:ProportionalDockSplitter CanResize="True" />
-                        <DocumentDock CloseButtonShowMode="Never">
-                            <Document
-                                CanClose="False"
-                                Id="Annotations"
-                                Title="注释信息">
-                                <Document.Content>
-                                    <views:AnnotationToolView DataContext="{Binding DataContext, ElementName=EditorView}" />
-                                </Document.Content>
-                            </Document>
-                        </DocumentDock>
-                    </ProportionalDock>
-
-
-                    <!--     <dockmodel:RootDock.VisibleDockables> -->
-                    <!--  <dockmodel:ProportionalDock  -->
-                    <!--  Id="Panels"  -->
-                    <!--  IsCollapsable="False"  -->
-                    <!--  Orientation="Horizontal"  -->
-                    <!--  Title="注释面板">  -->
-                    <!--             <dockmodel:ProportionalDock.VisibleDockables> -->
-                    <!--  <dockmodel:DocumentDock  -->
-                    <!--  CanCloseLastDockable="False"  -->
-                    <!--  CanCreateDocument="False"  -->
-                    <!--  CanDockAsDocument="False"  -->
-                    <!--  CanDrag="True"  -->
-                    <!--  CanDrop="True"  -->
-                    <!--  CloseButtonShowMode="Always"  -->
-                    <!--  EnableWindowDrag="False"  -->
-                    <!--  Id="PdfDock"  -->
-                    <!--  Title="PDF 预览">  -->
-                    <!--                     <dockmodel:DocumentDock.VisibleDockables> -->
-                    <!--                         <dockmodel:Document Id="Pdf" Title="PDF 预览"> -->
-                    <!--                             <dockmodel:Document.Content> -->
-                    <!--                                 <views:PdfToolView DataContext="{Binding DataContext, ElementName=EditorView}" /> -->
-                    <!--                             </dockmodel:Document.Content> -->
-                    <!--                         </dockmodel:Document> -->
-                    <!--                     </dockmodel:DocumentDock.VisibleDockables> -->
-                    <!--                 </dockmodel:DocumentDock> -->
-                    <!--                 <dockmodel:ProportionalDockSplitter CanResize="True" /> -->
-                    <!--  <dockmodel:DocumentDock  -->
-                    <!--  CanCloseLastDockable="False"  -->
-                    <!--  CanCreateDocument="False"  -->
-                    <!--  CanDockAsDocument="False"  -->
-                    <!--  CanDrag="True"  -->
-                    <!--  CanDrop="True"  -->
-                    <!--  CloseButtonShowMode="Always"  -->
-                    <!--  EnableWindowDrag="False"  -->
-                    <!--  Id="AnnotationDock"  -->
-                    <!--  Title="注释信息">  -->
-                    <!--                     <dockmodel:DocumentDock.VisibleDockables> -->
-                    <!--                         <dockmodel:Document Id="Annotations" Title="注释信息"> -->
-                    <!--                             <dockmodel:Document.Content> -->
-                    <!--                                 <views:AnnotationToolView DataContext="{Binding DataContext, ElementName=EditorView}" /> -->
-                    <!--                             </dockmodel:Document.Content> -->
-                    <!--                         </dockmodel:Document> -->
-                    <!--                     </dockmodel:DocumentDock.VisibleDockables> -->
-                    <!--                 </dockmodel:DocumentDock> -->
-                    <!--             </dockmodel:ProportionalDock.VisibleDockables> -->
-                    <!--         </dockmodel:ProportionalDock> -->
-                    <!--     </dockmodel:RootDock.VisibleDockables> -->
-                </dockmodel:RootDock>
-            </dock:DockControl.Layout>
-            </dock:DockControl>
+            <dock:Dock
+                x:Name="PanelDock"
+                Layout="LeftRight"
+                PaneTitle="注释信息"
+                Margin="4">
+                <dock:Dock.MainContent>
+                    <dock:Dock
+                        x:Name="PdfDock"
+                        PaneTitle="PDF 预览">
+                        <dock:Dock.PaneContent>
+                            <views:PdfToolView DataContext="{Binding DataContext, ElementName=EditorView}" />
+                        </dock:Dock.PaneContent>
+                    </dock:Dock>
+                </dock:Dock.MainContent>
+                <dock:Dock.PaneContent>
+                    <views:AnnotationToolView DataContext="{Binding DataContext, ElementName=EditorView}" />
+                </dock:Dock.PaneContent>
+            </dock:Dock>
         </Border>
 
         <atom:Dialog

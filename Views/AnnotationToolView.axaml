@@ -13,6 +13,7 @@
             Background="White"
             BorderBrush="#FFE5E7EB"
             BorderThickness="1"
+            ClipToBounds="True"
             CornerRadius="4">
             <dg:DataGrid
                 ColumnHeaderHeight="34"

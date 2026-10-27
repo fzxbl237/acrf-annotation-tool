@@ -1,9 +1,14 @@
-﻿using Avalonia;
+using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Media;
 using PdfViewerControl.Controls;
 namespace PdfViewerControl.Controls.Annotation;
+public sealed class AnnotationResizeCompletedEventArgs(FreeTextAnnotationControl annotation) : EventArgs
+{
+    public FreeTextAnnotationControl Annotation { get; } = annotation;
+}
+
 public sealed class AnnotationDragCompletedEventArgs(FreeTextAnnotationControl annotation) : EventArgs
 {
     public FreeTextAnnotationControl Annotation { get; } = annotation;
@@ -23,7 +28,7 @@ public sealed class PageAnnotationCanvas : Canvas
         DetachedFromVisualTree += (_, _) => AnnotationAdornerService.CleanupCanvas(this);
     }
     public event EventHandler<AnnotationDragCompletedEventArgs>? AnnotationDragCompleted;
-    public event EventHandler? AnnotationResizeCompleted;
+    public event EventHandler<AnnotationResizeCompletedEventArgs>? AnnotationResizeCompleted;
     public void HookAnnotation(FreeTextAnnotationControl ann) => ann.PointerPressed += OnAnnotationPointerPressed;
     public void UnhookAnnotation(FreeTextAnnotationControl ann)
     {
@@ -124,11 +129,14 @@ public sealed class PageAnnotationCanvas : Canvas
         _pressPosition = null;
         if (_resize != null)
         {
-            if (_resize.CommitIfActive()) _resizeTarget?.NotifyResizeCommitted();
+            var resize = _resize;
+            var resizedAnnotation = _resizeTarget;
+            if (resize.CommitIfActive()) resizedAnnotation?.NotifyResizeCommitted();
             _resize = null;
             _resizeTarget = null;
             _activeResizeHandle = null;
-            AnnotationResizeCompleted?.Invoke(this, EventArgs.Empty);
+            if (resizedAnnotation is { } annotation)
+                AnnotationResizeCompleted?.Invoke(this, new AnnotationResizeCompletedEventArgs(annotation));
             e.Handled = true;
             return;
         }

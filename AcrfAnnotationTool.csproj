@@ -5,8 +5,23 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <AvaloniaNameGeneratorBehavior>InitializeComponent</AvaloniaNameGeneratorBehavior>
+    <AvaloniaUseCompiledBindingsByDefault>true</AvaloniaUseCompiledBindingsByDefault>
+    <EnableAotAnalyzer>true</EnableAotAnalyzer>
+    <EnableTrimAnalyzer>true</EnableTrimAnalyzer>
     <RootNamespace>AcrfAnnotationTool</RootNamespace>
     <AssemblyName>AcrfAnnotationTool</AssemblyName>
+    <Version>0.45</Version>
+    <AssemblyVersion>0.45.0.0</AssemblyVersion>
+    <FileVersion>0.45.0.0</FileVersion>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(Configuration)' == 'Release' and '$(RuntimeIdentifier)' != '' and '$(PublishAot)' != 'false'">
+    <PublishAot>true</PublishAot>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(PublishAot)' == 'true'">
+    <TrimmerSingleWarn>false</TrimmerSingleWarn>
+    <StripSymbols>true</StripSymbols>
   </PropertyGroup>
 
   <ItemGroup>
@@ -16,21 +31,15 @@
   </ItemGroup>
 
   <ItemGroup>
-    <PackageReference Include="Avalonia" Version="12.1.1" />
-    <PackageReference Include="Avalonia.Desktop" Version="12.1.1" />
-    <PackageReference Include="Avalonia.Themes.Fluent" Version="12.1.1" />
-    <PackageReference Include="Avalonia.Fonts.Inter" Version="12.1.1" />
-    <PackageReference Include="Dock.Avalonia" Version="12.1.0.4" />
-    <PackageReference Include="Dock.Avalonia.Themes.Fluent" Version="12.1.0.4" />
-    <PackageReference Include="Dock.Model.Mvvm" Version="12.1.0.4" />
-    <PackageReference Include="Dock.Model.Avalonia" Version="12.1.0.4" />
+    <PackageReference Include="Avalonia" Version="12.1.4" />
+    <PackageReference Include="Avalonia.Desktop" Version="12.1.4" />
+    <PackageReference Include="Avalonia.Themes.Fluent" Version="12.1.4" />
+    <PackageReference Include="Avalonia.Fonts.Inter" Version="12.1.4" />
     <PackageReference Include="CommunityToolkit.Mvvm" Version="8.4.2" />
-    <PackageReference Include="AtomUI.Desktop.Controls" Version="6.1.7" />
-    <PackageReference Include="AtomUI.Desktop.Controls.DataGrid" Version="6.1.7" />
+    <PackageReference Include="AtomUI.Desktop.Controls" Version="6.2.8" />
     <PackageReference Include="DynamicData" Version="9.4.33" />
     <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="10.0.0" />
-    <PackageReference Include="SqlSugarCore" Version="5.1.4.211-preview01" />
-    <PackageReference Include="itext7" Version="9.7.0" />
+    <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.0" />
     <None Update="cdisc_setting.db"
           CopyToOutputDirectory="PreserveNewest"
           CopyToPublishDirectory="PreserveNewest" />
@@ -39,7 +48,6 @@
     <None Include="Fonts\**\*"
           CopyToOutputDirectory="PreserveNewest"
           CopyToPublishDirectory="PreserveNewest" />
-    <PackageReference Include="MiniExcel" Version="2.0.0-preview.2" />
     <PackageReference Include="Docnet.Core" Version="2.6.0" />
     <PackageReference Include="PDFsharp" Version="6.2.4" />
   </ItemGroup>

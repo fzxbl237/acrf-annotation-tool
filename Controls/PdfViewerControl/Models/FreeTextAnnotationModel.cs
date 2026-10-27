@@ -1,6 +1,8 @@
 ﻿namespace PdfViewerControl.Models;
 public sealed class FreeTextAnnotationModel
 {
+    public FreeTextAnnotationModel Clone() => (FreeTextAnnotationModel)MemberwiseClone();
+
     public string Id { get; init; } = Guid.NewGuid().ToString("N");
     public int PageIndex { get; set; }
     public double PdfX { get; set; }

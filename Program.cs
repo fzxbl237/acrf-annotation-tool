@@ -1,6 +1,9 @@
 ﻿using Avalonia;
 using Avalonia.Media.Fonts;
-using Dock.Settings;
+using AtomUI;
+using AtomUI.Desktop.Controls;
+using AtomUI.Localization;
+using AtomUI.Theme;
 
 namespace AcrfAnnotationTool;
 
@@ -20,18 +23,20 @@ internal static class Program
 
     public static AppBuilder BuildAvaloniaApp()
     {
-        DockSettings.DocumentWindowDragScope = WindowDragDockScope.FullWindow;
-
         return AppBuilder.Configure<App>()
             .UsePlatformDetect()
+            .UseAtomUI(builder =>
+            {
+                builder.UseLanguages(LanguageTags.ZhCN, [LanguageTags.En, LanguageTags.ZhCN]);
+                builder.WithInitialTheme(IThemeManager.DEFAULT_THEME_ID);
+                builder.UseAlibabaSansFont();
+                builder.UseDesktopControls();
+            })
             .WithInterFont()
             .ConfigureFonts(fontManager =>
             {
                 fontManager.AddFontCollection(new AcrfProjectFontCollection());
             })
-            .UseFloatingDockAdorner()
-            .ShowDockablePreviewOnDrag()
-            .CloseFloatingWindowsOnMainWindowClose(true)
             .LogToTrace();
     }
 }

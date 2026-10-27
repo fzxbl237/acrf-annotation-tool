@@ -19,7 +19,9 @@ public partial class PdfViewer : UserControl, IDisposable
     private readonly PdfDocumentLoader _loader = new();
     private readonly List<FreeTextAnnotationModel> _annotations = new();
     private readonly List<PdfPageSlot> _pageSlots = new();
+    private readonly List<double> _pageHostTops = new();
     private readonly Dictionary<string, FreeTextAnnotationControl> _annotationControls = new();
+    private readonly List<PdfPageSlot> _bitmapSlots = new();
     private const int ViewportPageBuffer = 2;
     private string? _currentPdfPath;
     private int _currentPageIndex;
@@ -124,6 +126,7 @@ public partial class PdfViewer : UserControl, IDisposable
             ReleaseAllPageBitmaps();
             PagesPanel.Children.Clear();
             _pageSlots.Clear();
+            _pageHostTops.Clear();
             _annotationControls.Clear();
             _selectedAnnotation = null;
             SetLoadUiBusy(true, "正在构建页面…");
@@ -256,6 +259,7 @@ public partial class PdfViewer : UserControl, IDisposable
             ReleaseAllPageBitmaps();
             PagesPanel.Children.Clear();
             _pageSlots.Clear();
+            _pageHostTops.Clear();
             _annotationControls.Clear();
             _selectedAnnotation = null;
             if (_loader.PageCount == 0) { UpdatePageInfo(); return; }
@@ -306,7 +310,19 @@ public partial class PdfViewer : UserControl, IDisposable
                 RelayoutDomainAnnotations(slot, php, scale);
             }
         }
+        RebuildPageHostTops();
         UpdatePageInfo();
+    }
+
+    private void RebuildPageHostTops()
+    {
+        _pageHostTops.Clear();
+        var top = PagesPanel.Margin.Top;
+        foreach (var slot in _pageSlots)
+        {
+            _pageHostTops.Add(top);
+            top += slot.Host.Height + slot.Host.Margin.Top + slot.Host.Margin.Bottom;
+        }
     }
 
     private void RescaleAnnotationsOnLayer(PageAnnotationCanvas layer, int pi, double php, double scale)
@@ -361,7 +377,11 @@ public partial class PdfViewer : UserControl, IDisposable
             BorderThickness = new Thickness(1)
         };
         PagesPanel.Children.Add(host);
+        var top = _pageHostTops.Count == 0
+            ? PagesPanel.Margin.Top
+            : _pageHostTops[^1] + _pageSlots[^1].Host.Height + _pageSlots[^1].Host.Margin.Top + _pageSlots[^1].Host.Margin.Bottom;
         _pageSlots.Add(new PdfPageSlot { PageIndex = pi, Host = host });
+        _pageHostTops.Add(top);
     }
 
     private void MountPageContent(PdfPageSlot slot)
@@ -395,18 +415,18 @@ public partial class PdfViewer : UserControl, IDisposable
         var annotationLayer = new PageAnnotationCanvas { Width = ps.Width, Height = ps.Height, ZIndex = 2 };
         annotationLayer.AnnotationDragCompleted += (_, args) =>
         {
+            var previousPosition = args.Annotation.Model is { } previousModel
+                ? new Point(previousModel.PdfX, previousModel.PdfY)
+                : (Point?)null;
             CommitAnnotationFromControl(args.Annotation);
             if (args.Annotation.Model is { } model)
-                AnnotationMoved?.Invoke(this, new AnnotationMovedEventArgs(model));
+                AnnotationMoved?.Invoke(this, new AnnotationMovedEventArgs(model, previousPosition));
         };
-        annotationLayer.AnnotationResizeCompleted += (_, _) =>
+        annotationLayer.AnnotationResizeCompleted += (_, args) =>
         {
-            foreach (var control in annotationLayer.Children.OfType<FreeTextAnnotationControl>())
-            {
-                CommitAnnotationFromControl(control);
-                if (control.Model is { } model)
-                    AnnotationMoved?.Invoke(this, new AnnotationMovedEventArgs(model));
-            }
+            // NotifyResizeCommitted already commits this control; only raise the targeted move event.
+            if (args.Annotation.Model is { } model)
+                AnnotationMoved?.Invoke(this, new AnnotationMovedEventArgs(model));
         };
         pageRoot.Children.Add(annotationLayer);
 
@@ -495,8 +515,9 @@ public partial class PdfViewer : UserControl, IDisposable
             ReleasePageBitmap(slot);
     }
 
-    private static void ReleasePageBitmap(PdfPageSlot slot)
+    private void ReleasePageBitmap(PdfPageSlot slot)
     {
+        _bitmapSlots.Remove(slot);
         var bitmap = slot.PageImage?.Source as IDisposable;
         if (slot.PageImage is { } pageImage)
             pageImage.Source = null;
@@ -506,7 +527,7 @@ public partial class PdfViewer : UserControl, IDisposable
         bitmap?.Dispose();
     }
 
-    private static void AttachPageBitmap(PdfPageSlot slot, WriteableBitmap bitmap)
+    private void AttachPageBitmap(PdfPageSlot slot, WriteableBitmap bitmap)
     {
         if (slot.PageImage is not { } pageImage)
         {
@@ -515,6 +536,8 @@ public partial class PdfViewer : UserControl, IDisposable
         }
         var previousBitmap = pageImage.Source as IDisposable;
         pageImage.Source = bitmap;
+        if (!_bitmapSlots.Contains(slot))
+            _bitmapSlots.Add(slot);
         slot.IsBitmapLoaded = true;
         if (slot.LoadingOverlay is { } loadingOverlay)
             loadingOverlay.IsVisible = false;
@@ -530,8 +553,13 @@ public partial class PdfViewer : UserControl, IDisposable
             MountPageContent(_pageSlots[pageIndex]);
         var ordered = vis.OrderBy(i => Math.Abs(i - _currentPageIndex)).ThenBy(i => i).ToList();
         if (ordered.Count == 0) return;
-        await TryRenderPageAsync(ordered[0], gen);
-        if (ordered.Count > 1) await Task.WhenAll(ordered.Skip(1).Select(i => TryRenderPageAsync(i, gen)));
+        foreach (var pageIndex in ordered)
+        {
+            await TryRenderPageAsync(pageIndex, gen);
+            if (_disposed || gen != _renderGeneration)
+                break;
+        }
+
     }
 
     private async Task TryRenderPageAsync(int pi, int gen)
@@ -549,11 +577,11 @@ public partial class PdfViewer : UserControl, IDisposable
         {
             await _pageRenderSemaphore.WaitAsync();
             renderPermitAcquired = true;
-            if (_disposed || gen != _renderGeneration || !GetVisiblePageRange(ViewportPageBuffer).Contains(pi))
+            if (_disposed || gen != _renderGeneration || !IsPageInVisibleRange(pi))
                 return;
             bitmap = await Task.Run(() => _loader.RenderPage(pi));
             if (_disposed || gen != _renderGeneration) return;
-            if (!GetVisiblePageRange(ViewportPageBuffer).Contains(pi))
+            if (!IsPageInVisibleRange(pi))
             {
                 if (s.LoadingOverlay is { } staleLoadingOverlay)
                     staleLoadingOverlay.IsVisible = false;
@@ -571,17 +599,83 @@ public partial class PdfViewer : UserControl, IDisposable
         }
     }
 
+    private (int First, int Last) GetVisiblePageBounds(int buf)
+    {
+        if (_pageSlots.Count == 0) return (0, -1);
+        var vt = MainScrollViewer.Offset.Y; var vb = vt + MainScrollViewer.Bounds.Height;
+        var first = LowerBoundPageHostBottom(vt);
+        var last = LowerBoundPageHostTop(vb) - 1;
+
+        if (first >= _pageSlots.Count || last < first)
+            first = last = Math.Clamp(_currentPageIndex, 0, _pageSlots.Count - 1);
+        var s = Math.Max(0, first - buf);
+        var e = Math.Min(_pageSlots.Count - 1, last + buf);
+        var current = Math.Clamp(_currentPageIndex, 0, _pageSlots.Count - 1);
+        s = Math.Min(s, Math.Max(0, current - buf));
+        e = Math.Max(e, Math.Min(_pageSlots.Count - 1, current + buf));
+
+
+        return (s, e);
+    }
+
     private IReadOnlyList<int> GetVisiblePageRange(int buf)
     {
-        if (_pageSlots.Count == 0) return Array.Empty<int>();
-        var vt = MainScrollViewer.Offset.Y; var vb = vt + MainScrollViewer.Bounds.Height;
-        int first = -1, last = -1; double cy = 16;
-        for (int i = 0; i < _pageSlots.Count; i++) { var h = GetPageHostHeight(i); if (cy + h > vt && cy < vb) { if (first < 0) first = i; last = i; } cy += h; }
-        if (first < 0) first = last = Math.Clamp(_currentPageIndex, 0, _pageSlots.Count - 1);
-        var s = Math.Max(0, first - buf); var e = Math.Min(_pageSlots.Count - 1, last + buf);
-        var cur = Math.Clamp(_currentPageIndex, 0, _pageSlots.Count - 1);
-        s = Math.Min(s, Math.Max(0, cur - buf)); e = Math.Max(e, Math.Min(_pageSlots.Count - 1, cur + buf));
-        var list = new List<int>(); for (int i = s; i <= e; i++) list.Add(i); return list;
+        var (first, last) = GetVisiblePageBounds(buf);
+        if (last < first) return Array.Empty<int>();
+        var pages = new int[last - first + 1];
+        for (var i = 0; i < pages.Length; i++) pages[i] = first + i;
+        return pages;
+    }
+
+    private bool IsPageInVisibleRange(int pageIndex)
+    {
+        var (first, last) = GetVisiblePageBounds(ViewportPageBuffer);
+        return pageIndex >= first && pageIndex <= last;
+    }
+
+    private int LowerBoundPageHostBottom(double y)
+    {
+        var low = 0;
+        var high = _pageSlots.Count;
+        while (low < high)
+        {
+            var mid = low + (high - low) / 2;
+            if (_pageHostTops[mid] + GetPageHostHeight(mid) <= y)
+                low = mid + 1;
+            else
+                high = mid;
+        }
+        return low;
+    }
+
+    private int LowerBoundPageHostTop(double y)
+    {
+        var low = 0;
+        var high = _pageSlots.Count;
+        while (low < high)
+        {
+            var mid = low + (high - low) / 2;
+            if (_pageHostTops[mid] < y)
+                low = mid + 1;
+            else
+                high = mid;
+        }
+        return low;
+    }
+
+    private int UpperBoundPageHostTop(double y)
+    {
+        var low = 0;
+        var high = _pageSlots.Count;
+        while (low < high)
+        {
+            var mid = low + (high - low) / 2;
+            if (_pageHostTops[mid] <= y)
+                low = mid + 1;
+            else
+                high = mid;
+        }
+        return low;
     }
 
     private void RebuildAnnotationsForPage(int pi, double php, double scale, Canvas layer) { layer.Children.Clear(); foreach (var m in _annotations.Where(a => a.PageIndex == pi)) AddAnnotationControl(m, php, scale, layer); }
@@ -698,15 +792,22 @@ public partial class PdfViewer : UserControl, IDisposable
         _pageNumberBarHideTimer.Start();
     }
 
-    private void UpdateCurrentPageIndexFromViewport() { if (_pageSlots.Count == 0) return; double cy = 16; var vc = MainScrollViewer.Offset.Y + MainScrollViewer.Bounds.Height / 2; int best = 0; for (int i = 0; i < _pageSlots.Count; i++) { var h = GetPageHostHeight(i); if (vc >= cy && vc < cy + h) { best = i; break; } if (vc >= cy + h) best = i; cy += h; } if (best != _currentPageIndex) { _currentPageIndex = best; UpdatePageInfo(); } }
+    private void UpdateCurrentPageIndexFromViewport()
+    {
+        if (_pageSlots.Count == 0) return;
+        var viewportCenter = MainScrollViewer.Offset.Y + MainScrollViewer.Bounds.Height / 2;
+        var pageIndex = UpperBoundPageHostTop(viewportCenter) - 1;
+        var best = Math.Clamp(pageIndex, 0, _pageSlots.Count - 1);
+        if (best != _currentPageIndex) { _currentPageIndex = best; UpdatePageInfo(); }
+    }
     private double GetPageHostHeight(int i)
     {
         var host = _pageSlots[i].Host;
-        if (host.Bounds.Height > 0)
-            return host.Bounds.Height + host.Margin.Top + host.Margin.Bottom;
-        return _loader.PageSizes.Count > i ? _loader.PageSizes[i].Height + 20 : 800;
+
+        return host.Height + host.Margin.Top + host.Margin.Bottom;
+
     }
-    private void ScrollToPage(int pi) { if (pi < 0 || pi >= PagesPanel.Children.Count) return; double y = 16; for (int i = 0; i < pi && i < _pageSlots.Count; i++) y += GetPageHostHeight(i); MainScrollViewer.Offset = new Vector(MainScrollViewer.Offset.X, Math.Max(0, y - 8)); }
+    private void ScrollToPage(int pi) { if (pi < 0 || pi >= PagesPanel.Children.Count) return; var top = GetPageHostTop(pi); MainScrollViewer.Offset = new Vector(MainScrollViewer.Offset.X, Math.Max(0, top - 8)); }
     private void UpdateZoomLabel()
     {
         if (ZoomComboBox != null && ZoomSlider != null)
@@ -810,6 +911,7 @@ public partial class PdfViewer : UserControl, IDisposable
             UnmountPageContent(slot);
         PagesPanel.Children.Clear();
         _pageSlots.Clear();
+        _pageHostTops.Clear();
         _annotationControls.Clear();
         _selectedAnnotation = null;
         _loader.Dispose();

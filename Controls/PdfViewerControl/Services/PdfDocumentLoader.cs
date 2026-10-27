@@ -97,17 +97,22 @@ public sealed class PdfDocumentLoader : IDisposable
                 rented = ArrayPool<byte>.Shared.Rent(byteCount);
                 pageReader.WriteImageToBuffer((Docnet.Core.Models.RenderFlags)0, rented);
                 var bmp = new WriteableBitmap(new PixelSize(width, height), new Vector(96, 96));
-                using (var fb = bmp.Lock())
+                try
                 {
+                    using var fb = bmp.Lock();
                     var srcStride = width * 4;
-                    for (var y = 0; y < height; y++)
-                    {
-                        var srcOffset = y * srcStride;
-                        var dstOffset = y * fb.RowBytes;
-                        Marshal.Copy(rented, srcOffset, fb.Address + dstOffset, Math.Min(srcStride, fb.RowBytes));
-                    }
+                    if (fb.RowBytes == srcStride)
+                        Marshal.Copy(rented, 0, fb.Address, byteCount);
+                    else
+                        for (var y = 0; y < height; y++)
+                            Marshal.Copy(rented, y * srcStride, fb.Address + y * fb.RowBytes, Math.Min(srcStride, fb.RowBytes));
+                    return bmp;
                 }
-                return bmp;
+                catch
+                {
+                    bmp.Dispose();
+                    throw;
+                }
             }
             catch (Docnet.Core.Exceptions.DocnetException) { return null; }
             finally
@@ -204,14 +209,15 @@ public sealed class PdfDocumentLoader : IDisposable
     {
         var w = Math.Max(1, width);
         var h = Math.Max(1, height);
-        var pixels = new byte[w * h * 4];
+        // Reuse one scanline instead of allocating another full-page buffer.
+        var pixels = new byte[checked(w * 4)];
         for (var i = 0; i < pixels.Length; i += 4) { pixels[i] = 0xF3; pixels[i + 1] = 0xF4; pixels[i + 2] = 0xF6; pixels[i + 3] = 0xFF; }
         var bitmap = new WriteableBitmap(new PixelSize(w, h), new Vector(96, 96));
         using (var fb = bitmap.Lock())
         {
             var stride = w * 4;
             for (var y = 0; y < h; y++)
-                Marshal.Copy(pixels, y * stride, fb.Address + y * fb.RowBytes, Math.Min(stride, fb.RowBytes));
+                Marshal.Copy(pixels, 0, fb.Address + y * fb.RowBytes, Math.Min(stride, fb.RowBytes));
         }
         return bitmap;
     }

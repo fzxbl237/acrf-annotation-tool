@@ -53,8 +53,7 @@ public class DataGridPopupColumn : DataGridBoundColumn
         };
         if (Binding != null && dataItem != null)
         {
-            var b = CloneBinding(Binding);
-            if (b is Binding binding) binding.Mode = BindingMode.OneWay;
+            var b = CloneBinding(Binding, BindingMode.OneWay);
             tb.Bind(TextBlock.TextProperty, b);
         }
         else if (dataItem != null) tb.Text = dataItem.ToString();
@@ -96,12 +95,7 @@ public class DataGridPopupColumn : DataGridBoundColumn
             Lines = 5,
             Margin = new Thickness(0, 0, 0, 4),
         };
-        editTextBox.Bind(TextBox.TextProperty, new Binding
-        {
-            Source = panel,
-            Path = nameof(Panel.Tag),
-            Mode = BindingMode.TwoWay,
-        });
+        editTextBox[!TextBox.TextProperty] = panel[!Panel.TagProperty];
 
         var validationText = new TextBlock
         {

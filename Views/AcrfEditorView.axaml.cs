@@ -11,6 +11,17 @@ public partial class AcrfEditorView : UserControl
     public AcrfEditorView()
     {
         InitializeComponent();
+        PdfDock.DockHost = PanelDock;
+        OpenPdfButton.AsyncAction = () => DataContext is AcrfDocumentViewModel vm
+            ? vm.OpenPdfWithResultAsync() : Task.FromResult(false);
+        ImportSpecButton.AsyncAction = () => DataContext is AcrfDocumentViewModel vm
+            ? vm.ImportWithResultAsync() : Task.FromResult(false);
+        ExportSpecButton.AsyncAction = async () => DataContext is AcrfDocumentViewModel vm &&
+            await vm.ExportSpecAsync() == SpecExportOutcome.Succeeded;
+        SavePdfButton.AsyncAction = () => DataContext is AcrfDocumentViewModel vm
+            ? vm.SavePdfWithResultAsync() : Task.FromResult(false);
+        SavePdfFlattenButton.AsyncAction = () => DataContext is AcrfDocumentViewModel vm
+            ? vm.SavePdfFlattenWithResultAsync() : Task.FromResult(false);
     }
 
     private void OnDomainAnnotationSettingsClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)

@@ -102,8 +102,6 @@ public partial class MainWindow : Window
     {
         _isShutdownConfirmationPending = false;
         CloseShutdownConfirmation();
-        if (DataContext is MainWindowViewModel viewModel)
-            viewModel.BeginApplicationShutdown();
         _allowClose = true;
         Close();
     }

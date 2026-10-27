@@ -46,11 +46,7 @@ public class DataGridTagColumn : DataGridBoundColumn
             return tag;
         }
 
-        var textBinding = CloneBinding(Binding);
-        if (textBinding is Binding textDataBinding)
-        {
-            textDataBinding.Mode = BindingMode.OneWay;
-        }
+        var textBinding = CloneBinding(Binding, BindingMode.OneWay);
         tag.Bind(AtomTag.TextProperty, textBinding);
 
         if (ColorConverter == null)
@@ -58,12 +54,16 @@ public class DataGridTagColumn : DataGridBoundColumn
             return tag;
         }
 
-        var colorBinding = CloneBinding(Binding);
+        var colorBinding = CloneBinding(Binding, BindingMode.OneWay);
         if (colorBinding is Binding colorDataBinding)
         {
-            colorDataBinding.Mode = BindingMode.OneWay;
             colorDataBinding.Converter = ColorConverter;
             colorDataBinding.ConverterParameter = ColorConverterParameter;
+        }
+        if (colorBinding is CompiledBinding compiledColorBinding)
+        {
+            compiledColorBinding.Converter = ColorConverter;
+            compiledColorBinding.ConverterParameter = ColorConverterParameter;
         }
         tag.Bind(AtomTag.TagColorProperty, colorBinding);
 

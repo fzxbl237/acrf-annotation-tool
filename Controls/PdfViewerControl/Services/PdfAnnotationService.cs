@@ -1,5 +1,6 @@
 ﻿using System.Globalization;
-using System.Reflection;
+using System.Runtime.CompilerServices;
+using PdfSharp.Pdf.Advanced;
 using System.Security;
 using System.Text.RegularExpressions;
 using Avalonia.Media;
@@ -13,20 +14,19 @@ using PdfViewerControl.Models;
 
 namespace PdfViewerControl.Services;
 
-public static class PdfAnnotationService
+public static partial class PdfAnnotationService
 {
     static PdfAnnotationService()
     {
         GlobalFontSettings.FontResolver = new ProjectFontResolver();
     }
 
-    private static readonly Regex DaRegex = new(
-        @"/(?<font>[\w+-]+)\s+(?<size>[\d.]+)\s+Tf\s+(?<r>[\d.]+)\s+(?<g>[\d.]+)\s+(?<b>[\d.]+)\s+rg",
-        RegexOptions.Compiled);
+    [GeneratedRegex(@"/(?<font>[\w+-]+)\s+(?<size>[\d.]+)\s+Tf\s+(?<r>[\d.]+)\s+(?<g>[\d.]+)\s+(?<b>[\d.]+)\s+rg")]
+    private static partial Regex DefaultAppearanceRegex();
 
-    private static readonly PropertyInfo PdfFormProperty =
-        typeof(XForm).GetProperty("PdfForm", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance)
-        ?? throw new InvalidOperationException("PDFsharp XForm.PdfForm property is unavailable.");
+    // PDFsharp 6.2.4 exposes the appearance form only through this internal getter.
+    [UnsafeAccessor(UnsafeAccessorKind.Method, Name = "get_PdfForm")]
+    private static extern PdfFormXObject GetPdfForm(XForm form);
 
     public static List<FreeTextAnnotationModel> LoadFreeTextAnnotations(string pdfPath)
     {
@@ -53,7 +53,7 @@ public static class PdfAnnotationService
                 var da = annotation.Elements.GetString("/DA");
                 if (!string.IsNullOrWhiteSpace(da))
                 {
-                    var match = DaRegex.Match(da);
+                    var match = DefaultAppearanceRegex().Match(da);
                     if (match.Success)
                     {
                         if (double.TryParse(match.Groups["size"].Value, NumberStyles.Float, CultureInfo.InvariantCulture, out var sz))
@@ -210,7 +210,7 @@ public static class PdfAnnotationService
         using (var graphics = XGraphics.FromForm(form))
             DrawAnnotationAppearanceContent(graphics, model, 0, 0);
 
-        var pdfForm = PdfFormProperty.GetValue(form) as PdfObject
+        var pdfForm = GetPdfForm(form)
             ?? throw new InvalidOperationException("PDFsharp did not create the FreeText appearance form.");
         var appearance = new PdfDictionary(document);
         appearance.Elements.SetReference("/N", pdfForm);
