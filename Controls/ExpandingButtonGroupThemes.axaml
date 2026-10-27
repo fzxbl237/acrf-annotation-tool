@@ -1,0 +1,139 @@
+<ResourceDictionary xmlns="https://github.com/avaloniaui"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                    xmlns:local="using:AcrfAnnotationTool.Controls"
+                    xmlns:menus="using:AcrfAnnotationTool.Controls.Menus">
+    <ControlTheme x:Key="{x:Type local:ExpandingButtonGroup}" TargetType="local:ExpandingButtonGroup">
+        <Setter Property="Template">
+            <ControlTemplate>
+                <Border Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}"
+                        BorderThickness="1" CornerRadius="24" Padding="3">
+                    <ItemsPresenter Name="PART_ItemsPresenter" ItemsPanel="{TemplateBinding ItemsPanel}" />
+                </Border>
+            </ControlTemplate>
+        </Setter>
+        <Setter Property="ItemsPanel">
+            <ItemsPanelTemplate><StackPanel Orientation="Horizontal" Spacing="2" /></ItemsPanelTemplate>
+        </Setter>
+        <Setter Property="Background" Value="White" />
+        <Setter Property="BorderBrush" Value="#E5E5E5" />
+        <Setter Property="Foreground" Value="#666666" />
+        <Setter Property="FontSize" Value="13" />
+        <Setter Property="FontWeight" Value="Medium" />
+        <Setter Property="HorizontalAlignment" Value="Left" />
+        <Setter Property="VerticalAlignment" Value="Center" />
+    </ControlTheme>
+    <ControlTheme x:Key="{x:Type local:ExpandingButtonGroupItem}" TargetType="local:ExpandingButtonGroupItem">
+        <Setter Property="Height" Value="36" />
+        <Setter Property="MinWidth" Value="0" />
+        <Setter Property="Padding" Value="0" />
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="Cursor" Value="Hand" />
+        <Setter Property="Template">
+            <ControlTemplate>
+                <Panel>
+                    <Border Background="{TemplateBinding Background}" CornerRadius="20" ClipToBounds="True">
+                        <StackPanel Orientation="Horizontal" Spacing="7" Margin="10,0,0,0"
+                                    HorizontalAlignment="Left" VerticalAlignment="Center">
+                            <ContentPresenter Name="PART_Icon" Content="{TemplateBinding Icon}" Width="16" Height="16"
+                                              VerticalAlignment="Center" />
+                            <TextBlock Name="PART_Label" Text="{TemplateBinding Label}" VerticalAlignment="Center"
+                                       AutomationProperties.AccessibilityView="Raw" />
+                        </StackPanel>
+                    </Border>
+                    <Border Name="PART_FocusRing" IsVisible="False" IsHitTestVisible="False"
+                            BorderBrush="#4A83C4" BorderThickness="2" CornerRadius="20" />
+                </Panel>
+            </ControlTemplate>
+        </Setter>
+        <Style Selector="^:expanded">
+            <Setter Property="Background" Value="#F4F4F4" />
+            <Setter Property="Foreground" Value="#353535" />
+        </Style>
+        <Style Selector="^:pressed">
+            <Setter Property="Background" Value="#E8E8E8" />
+        </Style>
+        <Style Selector="^:done">
+            <Setter Property="Background" Value="#EAF1EA" />
+            <Setter Property="Foreground" Value="#353535" />
+        </Style>
+        <Style Selector="^:busy"><Setter Property="Cursor" Value="AppStarting" /></Style>
+        <Style Selector="^:disabled"><Setter Property="Opacity" Value="0.5" /></Style>
+        <Style Selector="^:focus-visible /template/ Border#PART_FocusRing">
+            <Setter Property="IsVisible" Value="True" />
+        </Style>
+    </ControlTheme>
+    <ControlTheme x:Key="{x:Type menus:MenuSurface}" TargetType="menus:MenuSurface">
+        <Setter Property="Background" Value="{DynamicResource SystemControlBackgroundAltHighBrush}" />
+        <Setter Property="Foreground" Value="{DynamicResource SystemControlForegroundBaseHighBrush}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource SystemControlForegroundBaseLowBrush}" />
+        <Setter Property="BorderThickness" Value="1" />
+        <Setter Property="CornerRadius" Value="10" />
+        <Setter Property="Padding" Value="5" />
+        <Setter Property="MinWidth" Value="208" />
+        <Setter Property="MaxHeight" Value="300" />
+        <Setter Property="FontSize" Value="13" />
+        <Setter Property="FocusAdorner" Value="{x:Null}" />
+        <Setter Property="ItemsPanel">
+            <ItemsPanelTemplate><StackPanel /></ItemsPanelTemplate>
+        </Setter>
+        <Setter Property="Template">
+            <ControlTemplate>
+                <Border Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}"
+                        BorderThickness="{TemplateBinding BorderThickness}" CornerRadius="{TemplateBinding CornerRadius}"
+                        Padding="{TemplateBinding Padding}">
+                    <ScrollViewer HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Auto">
+                        <Panel Name="PART_ItemsHost">
+                            <menus:GlidingIndicator Name="PART_Highlight" Spring="Snappy" CornerRadius="6"
+                                                    Fill="{DynamicResource SystemControlHighlightListLowBrush}" />
+                            <ItemsPresenter Name="PART_ItemsPresenter" ItemsPanel="{TemplateBinding ItemsPanel}" />
+                        </Panel>
+                    </ScrollViewer>
+                </Border>
+            </ControlTemplate>
+        </Setter>
+        <Style Selector="^:danger-highlight /template/ menus|GlidingIndicator#PART_Highlight">
+            <Setter Property="Fill" Value="#18FF4D4F" />
+        </Style>
+    </ControlTheme>
+    <ControlTheme x:Key="{x:Type menus:MenuEntry}" TargetType="menus:MenuEntry">
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="Padding" Value="8,0" />
+        <Setter Property="CornerRadius" Value="6" />
+        <Setter Property="Cursor" Value="Hand" />
+        <Setter Property="FocusAdorner" Value="{x:Null}" />
+        <Setter Property="Template">
+            <ControlTemplate>
+                <DockPanel>
+                    <Border DockPanel.Dock="Top" Height="1" Margin="4,4"
+                            Background="{DynamicResource SystemControlForegroundBaseLowBrush}"
+                            IsVisible="{TemplateBinding HasSeparatorBefore}" />
+                    <Border Name="PART_Row" MinHeight="34" Background="{TemplateBinding Background}"
+                            CornerRadius="{TemplateBinding CornerRadius}" Padding="{TemplateBinding Padding}">
+                        <Grid ColumnDefinitions="Auto,*,Auto">
+                            <Panel Width="16" Margin="0,0,9,0" VerticalAlignment="Center"
+                                   IsVisible="{TemplateBinding HasIconSlot}">
+                                <ContentPresenter Content="{TemplateBinding IconContent}"
+                                                  HorizontalAlignment="Center" VerticalAlignment="Center" />
+                                <Ellipse Width="6" Height="6" Fill="{TemplateBinding Foreground}"
+                                         IsVisible="{TemplateBinding ShowsRadioDot}"
+                                         HorizontalAlignment="Center" VerticalAlignment="Center" />
+                            </Panel>
+                            <ContentPresenter Grid.Column="1" Content="{TemplateBinding Header}"
+                                              ContentTemplate="{TemplateBinding EffectiveHeaderTemplate}"
+                                              VerticalAlignment="Center" />
+                            <TextBlock Grid.Column="2" Text="{TemplateBinding GestureText}" Margin="12,0,0,0"
+                                       Opacity="0.55" VerticalAlignment="Center" />
+                        </Grid>
+                    </Border>
+                </DockPanel>
+            </ControlTemplate>
+        </Setter>
+        <Style Selector="^[IsDestructive=True]">
+            <Setter Property="Foreground" Value="#FF4D4F" />
+        </Style>
+        <Style Selector="^:pressed">
+            <Setter Property="Background" Value="{DynamicResource SystemControlHighlightListMediumBrush}" />
+        </Style>
+        <Style Selector="^:disabled"><Setter Property="Opacity" Value="0.45" /></Style>
+    </ControlTheme>
+</ResourceDictionary>
