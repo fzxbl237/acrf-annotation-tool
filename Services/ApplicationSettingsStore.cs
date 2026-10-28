@@ -7,7 +7,9 @@ public sealed record ApplicationSettings(
     double DomainAnnotationHorizontalOffset,
     double DomainAnnotationVerticalOffset,
     bool? IsPdfAnnotationEditingEnabled = null,
-    bool Language = false);
+    bool Language = false,
+    Dock.Controls.DockLayoutState? PanelDock = null,
+    Dock.Controls.DockLayoutState? PdfDock = null);
 
 [JsonSourceGenerationOptions(WriteIndented = true)]
 [JsonSerializable(typeof(ApplicationSettings))]

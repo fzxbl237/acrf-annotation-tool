@@ -60,8 +60,82 @@ public class DataGrid : TemplatedControl
     private bool _replayingHistory;
     private bool _canUndo;
     private bool _canRedo;
-    private AtomButton? _undoButton;
-    private AtomButton? _redoButton;
+    private AtomIconButton? _undoButton;
+    private AtomIconButton? _redoButton;
+    private AtomIconButton? _errorFilterButton;
+    private ErrorFilterIcon? _errorFilterIcon;
+    private bool _showErrorsOnly;
+    private bool _errorFilterRefreshQueued;
+    private readonly HashSet<INotifyDataErrorInfo> _errorFilterItems = new(ReferenceEqualityComparer.Instance);
+
+    private void ToggleErrorFilter()
+    {
+        EndEditBeforeLayoutChange();
+        _showErrorsOnly = !_showErrorsOnly;
+        if (_errorFilterIcon != null) _errorFilterIcon.IsActive = _showErrorsOnly;
+        if (_errorFilterButton != null)
+        {
+            AtomUI.Desktop.Controls.ToolTip.SetTip(_errorFilterButton,
+                _showErrorsOnly ? "取消错误行筛选" : "仅显示有错误的行");
+            Avalonia.Automation.AutomationProperties.SetName(_errorFilterButton,
+                _showErrorsOnly ? "取消错误行筛选" : "仅显示有错误的行");
+        }
+        SyncErrorFilterSubscriptions();
+        ApplyFilterChange();
+    }
+
+    protected override void OnAttachedToVisualTree(VisualTreeAttachmentEventArgs e)
+    {
+        base.OnAttachedToVisualTree(e);
+        SyncErrorFilterSubscriptions();
+        if (_showErrorsOnly) ApplyFilterChange();
+    }
+
+    protected override void OnDetachedFromVisualTree(VisualTreeAttachmentEventArgs e)
+    {
+        foreach (var item in _errorFilterItems) item.ErrorsChanged -= OnErrorFilterItemChanged;
+        _errorFilterItems.Clear();
+        base.OnDetachedFromVisualTree(e);
+    }
+
+    private bool HasRowError(object item)
+    {
+        if (item is not INotifyDataErrorInfo errors || !errors.HasErrors) return false;
+        foreach (var path in Columns.Select(GetColumnBindingPath).Where(path => !string.IsNullOrWhiteSpace(path))
+                     .Prepend(null).Distinct())
+        {
+            if (errors.GetErrors(path) is { } values &&
+                ValidationUtil.GetValidationSeverity(ValidationUtil.CreateValidationExceptions(values)) >= DataGridValidationSeverity.Error)
+                return true;
+        }
+        return false;
+    }
+
+    private void SyncErrorFilterSubscriptions()
+    {
+        var items = _showErrorsOnly && TopLevel.GetTopLevel(this) != null && ItemsSource != null
+            ? new HashSet<INotifyDataErrorInfo>(ItemsSource.OfType<INotifyDataErrorInfo>(), ReferenceEqualityComparer.Instance)
+            : new HashSet<INotifyDataErrorInfo>(ReferenceEqualityComparer.Instance);
+        foreach (var item in _errorFilterItems.ToArray())
+            if (!items.Contains(item))
+            {
+                item.ErrorsChanged -= OnErrorFilterItemChanged;
+                _errorFilterItems.Remove(item);
+            }
+        foreach (var item in items)
+            if (_errorFilterItems.Add(item)) item.ErrorsChanged += OnErrorFilterItemChanged;
+    }
+
+    private void OnErrorFilterItemChanged(object? sender, DataErrorsChangedEventArgs e)
+    {
+        if (_errorFilterRefreshQueued) return;
+        _errorFilterRefreshQueued = true;
+        Dispatcher.UIThread.Post(() =>
+        {
+            _errorFilterRefreshQueued = false;
+            if (_showErrorsOnly && TopLevel.GetTopLevel(this) != null) ApplyFilterChange();
+        }, DispatcherPriority.Background);
+    }
 
     public static readonly StyledProperty<int> UndoLimitProperty =
         AvaloniaProperty.Register<DataGrid, int>(nameof(UndoLimit), 100, coerce: (_, value) => Math.Max(0, value));
@@ -211,9 +285,6 @@ public class DataGrid : TemplatedControl
         RefreshSearchResults();
         UpdateReplaceStatus();
         RevealHistoryChanges(appliedChanges);
-        // Queued separately: RevealHistoryChanges only drives cell selection, and the replay also
-        // queues its own scrolling, so the wash must land on cells already at their final position.
-        ScheduleHistoryFlash(entry, appliedChanges);
         if (entry.Undo != null)
         {
             ClearSelectedCells();
@@ -235,6 +306,30 @@ public class DataGrid : TemplatedControl
                 Focus();
             }
         }
+        // Queue after all history-specific scrolling. The target row is then realized before the
+        // overlay starts, including a restored row that was outside the viewport.
+        ScheduleHistoryFlash(entry, appliedChanges);
+    }
+
+    private HashSet<DataGridCellPosition> GetHistoryChangePositions(IReadOnlyList<CellChange> changes)
+    {
+        var items = GetItemsList();
+        var rowIndices = new Dictionary<object, int>(ReferenceEqualityComparer.Instance);
+        for (var row = 0; row < items.Count; row++)
+            if (items[row] is { } item) rowIndices.TryAdd(item, row);
+
+        var positions = new HashSet<DataGridCellPosition>();
+        foreach (var change in changes)
+        {
+            if (!rowIndices.TryGetValue(change.Item, out var row)) continue;
+            for (var column = 0; column < Columns.Count; column++)
+            {
+                if (Columns[column] is DataGridBoundColumn { IsVisible: true, BindingPath: { } path } &&
+                    ReferenceEquals(DataGridBoundColumn.GetItemProperty(change.Item, path), change.Property))
+                    positions.Add(new DataGridCellPosition(row, column));
+            }
+        }
+        return positions;
     }
 
     private void RevealHistoryChanges(IReadOnlyList<CellChange> changes)
@@ -243,20 +338,7 @@ public class DataGrid : TemplatedControl
 
         // Resolve after search refresh: history retains item identity, not filtered row indices.
         var items = GetItemsList();
-        var rowIndices = new Dictionary<object, int>(ReferenceEqualityComparer.Instance);
-        for (var row = 0; row < items.Count; row++)
-            if (items[row] is { } item) rowIndices.TryAdd(item, row);
-        var selection = new HashSet<DataGridCellPosition>();
-        foreach (var change in changes)
-        {
-            if (!rowIndices.TryGetValue(change.Item, out var row)) continue;
-            for (var column = 0; column < Columns.Count; column++)
-            {
-                if (Columns[column] is DataGridBoundColumn { IsVisible: true, BindingPath: { } path } &&
-                    ReferenceEquals(DataGridBoundColumn.GetItemProperty(change.Item, path), change.Property))
-                    selection.Add(new DataGridCellPosition(row, column));
-            }
-        }
+        var selection = GetHistoryChangePositions(changes);
         if (selection.Count == 0) return;
 
         var anchor = selection.OrderBy(position => position.RowIndex).ThenBy(position => position.ColumnIndex).First();
@@ -284,11 +366,37 @@ public class DataGrid : TemplatedControl
     // undo of a moved annotation, where the change is a restored record rather than a bound value.
     private void ScheduleHistoryFlash(HistoryEntry entry, IReadOnlyList<CellChange> changes)
     {
-        Dispatcher.UIThread.Post(() => FlashHistoryChanges(entry, changes), DispatcherPriority.Loaded);
+        Dispatcher.UIThread.Post(() => FlashHistoryChanges(entry, changes), DispatcherPriority.Render);
     }
 
     private void FlashHistoryChanges(HistoryEntry entry, IReadOnlyList<CellChange> changes)
     {
+        if (SelectionUnit == DataGridSelectionUnit.Cell && _selectionOverlay is { } overlay)
+        {
+            // Resolve by item/property instead of realized controls. The target row may have been
+            // outside the viewport when the replay started, but RevealHistoryChanges has already
+            // scrolled it into view before this callback runs.
+            var positions = GetHistoryChangePositions(changes);
+            if (positions.Count == 0 && entry.RestoredItem is { } restored)
+            {
+                var items = GetItemsList();
+                var row = items.IndexOf(restored);
+                var column = Columns
+                    .Select((value, index) => (value, index))
+                    .FirstOrDefault(pair => pair.value is DataGridBoundColumn { IsVisible: true });
+                if (row >= 0 && column.value != null)
+                    positions.Add(new DataGridCellPosition(row, column.index));
+            }
+
+            if (positions.Count > 0)
+            {
+                // Draw the wash in the grid overlay so adjacent cells share one continuous
+                // surface and the normal cell separators cannot show through.
+                overlay.Flash(positions);
+                return;
+            }
+        }
+
         var flashed = new HashSet<DataGridCell>();
         foreach (var change in changes)
         {
@@ -301,21 +409,6 @@ public class DataGrid : TemplatedControl
                         ReferenceEquals(DataGridBoundColumn.GetItemProperty(change.Item, path), change.Property))
                         flashed.Add(cell);
                 }
-            }
-        }
-        if (flashed.Count == 0 && entry.RestoredItem is { } restored)
-        {
-            // A restored record changes no bound value, so there is no column to point at. Mark its
-            // leftmost visible cell rather than the row: the wash identifies a cell, not a record.
-            foreach (var row in _realizedRows)
-            {
-                if (!ReferenceEquals(row.DataContext, restored)) continue;
-                var cell = row.Cells
-                    .Where(value => value.Column is DataGridBoundColumn { IsVisible: true })
-                    .OrderBy(value => value.Column!.Index)
-                    .FirstOrDefault();
-                if (cell != null) flashed.Add(cell);
-                break;
             }
         }
         foreach (var cell in flashed) cell.FlashHistoryChange();
@@ -672,14 +765,60 @@ public class DataGrid : TemplatedControl
         searchControls.Children.Add(prevBtn);
         searchControls.Children.Add(nextBtn);
         searchControls.Children.Add(_searchCountText);
-        _undoButton = new AtomButton { Content = "撤销", Margin = new Thickness(8, 0, 2, 0), Focusable = false };
-        _redoButton = new AtomButton { Content = "重做", Margin = new Thickness(2, 0), Focusable = false };
-        ToolTip.SetTip(_undoButton, "撤销 (Ctrl+Z)");
-        ToolTip.SetTip(_redoButton, "重做 (Ctrl+Y / Ctrl+Shift+Z)");
+        _undoButton = new AtomIconButton
+        {
+            Icon = new UndoOutlined(),
+            IconWidth = 18,
+            IconHeight = 18,
+            Foreground = new SolidColorBrush(Color.Parse("#353535")),
+            Width = 26,
+            Height = 26,
+            Margin = new Thickness(8, 0, 2, 0),
+            Padding = new Thickness(0),
+            MinWidth = 0,
+            VerticalAlignment = Avalonia.Layout.VerticalAlignment.Center,
+            Focusable = false
+        };
+        _redoButton = new AtomIconButton
+        {
+            Icon = new RedoOutlined(),
+            IconWidth = 18,
+            IconHeight = 18,
+            Foreground = new SolidColorBrush(Color.Parse("#353535")),
+            Width = 26,
+            Height = 26,
+            Margin = new Thickness(2, 0),
+            Padding = new Thickness(0),
+            MinWidth = 0,
+            VerticalAlignment = Avalonia.Layout.VerticalAlignment.Center,
+            Focusable = false
+        };
+        AtomUI.Desktop.Controls.ToolTip.SetTip(_undoButton, "撤销 (Ctrl+Z)");
+        AtomUI.Desktop.Controls.ToolTip.SetTip(_redoButton, "重做 (Ctrl+Y / Ctrl+Shift+Z)");
+        Avalonia.Automation.AutomationProperties.SetName(_undoButton, "撤销");
+        Avalonia.Automation.AutomationProperties.SetName(_redoButton, "重做");
         _undoButton.Click += (_, _) => Undo();
         _redoButton.Click += (_, _) => Redo();
         searchControls.Children.Add(_undoButton);
         searchControls.Children.Add(_redoButton);
+        _errorFilterIcon = new ErrorFilterIcon { IsActive = _showErrorsOnly };
+        _errorFilterButton = new AtomIconButton
+        {
+            Icon = _errorFilterIcon,
+            IconWidth = 20,
+            IconHeight = 20,
+            Width = 28,
+            Height = 28,
+            Margin = new Thickness(6, 0, 2, 0),
+            Padding = new Thickness(0),
+            MinWidth = 0,
+            Focusable = false,
+            VerticalAlignment = Avalonia.Layout.VerticalAlignment.Center
+        };
+        AtomUI.Desktop.Controls.ToolTip.SetTip(_errorFilterButton, "仅显示有错误的行");
+        Avalonia.Automation.AutomationProperties.SetName(_errorFilterButton, "仅显示有错误的行");
+        _errorFilterButton.Click += (_, _) => ToggleErrorFilter();
+        searchControls.Children.Add(_errorFilterButton);
         UpdateUndoState();
 
         var content = new Grid
@@ -1324,6 +1463,7 @@ public class DataGrid : TemplatedControl
             _pendingSearchQuery = null;
             _searchModel?.Clear();
             ClearAllFilters();
+            if (_showErrorsOnly) ToggleErrorFilter();
             Focus();
         };
         return new Border
@@ -1348,7 +1488,7 @@ public class DataGrid : TemplatedControl
         if (_emptyState == null || _emptyTitle == null || _emptyClearButton == null) return;
         _emptyState.IsVisible = empty;
         if (!empty) return;
-        var filtering = HasActiveSearch || Columns.Any(column => column.IsFiltered);
+        var filtering = _showErrorsOnly || HasActiveSearch || Columns.Any(column => column.IsFiltered);
         _emptyTitle.Text = filtering ? "没有匹配的行" : EmptyMessage ?? "暂无数据";
         _emptyClearButton.IsVisible = filtering;
     }
@@ -2010,6 +2150,7 @@ public class DataGrid : TemplatedControl
             else
             {
                 var source = ItemsSource.Cast<object>();
+                if (_showErrorsOnly) source = source.Where(HasRowError);
                 foreach (var col in Columns.Where(c => c.IsFiltered))
                     source = source.Where(item => col.PassesFilter(item));
                 if (HasActiveSearch && _searchModel != null)
@@ -2029,6 +2170,7 @@ public class DataGrid : TemplatedControl
         if (ItemsSource == null) return Array.Empty<object>();
 
         IEnumerable<object> source = ItemsSource.Cast<object>();
+        if (_showErrorsOnly) source = source.Where(HasRowError);
         foreach (var column in Columns.Where(column => column != currentColumn && column.IsFiltered))
             source = source.Where(column.PassesFilter);
 
@@ -3362,8 +3504,9 @@ public class DataGrid : TemplatedControl
             else if (e.Key == Key.Tab) { CommitEdit(); Navigate(e.KeyModifiers.HasFlag(KeyModifiers.Shift) ? -1 : 1, 0); e.Handled = true; }
             return;
         }
-        if (!e.Handled && e.KeyModifiers.HasFlag(KeyModifiers.Control) &&
-            e.Key is Key.Z or Key.Y && (ReferenceEquals(e.Source, this) || ReferenceEquals(e.Source, _currentCell)))
+        var isSearchInputFocused = _searchTextBox?.IsKeyboardFocusWithin == true;
+        if (!e.Handled && !isSearchInputFocused && IsKeyboardFocusWithin &&
+            e.KeyModifiers.HasFlag(KeyModifiers.Control) && e.Key is Key.Z or Key.Y)
         {
             if (e.Key == Key.Y || e.KeyModifiers.HasFlag(KeyModifiers.Shift)) Redo();
             else Undo();
@@ -3514,6 +3657,7 @@ public class DataGrid : TemplatedControl
     {
         Avalonia.Threading.Dispatcher.UIThread.Post(() =>
         {
+            SyncErrorFilterSubscriptions();
             InvalidateItemsCache();
             UpdateStatusBar();
             UpdateScrollBars();
@@ -3532,6 +3676,7 @@ public class DataGrid : TemplatedControl
     public void RefreshRows()
     {
         SubscribeCollectionChanged();
+        SyncErrorFilterSubscriptions();
         ClearSelectedCells();
         _cellSelectionAnchor = null;
             _cellSelectionVisualsDirty = true;
@@ -3878,15 +4023,20 @@ internal sealed class DataGridSelectionOverlay : Control
             }
         }
     }
-    // Arc's neutral accent with 9% selection fill and 14% blue history feedback.
+    // Arc's neutral accent with 9% selection fill and the shared gray clipboard/history wash.
     private const double FlashFadeInMilliseconds = 120;
-    private const double FlashDurationMilliseconds = 900;
+    internal const double FlashDurationMilliseconds = 900;
     private static readonly IBrush Accent = new SolidColorBrush(Color.Parse("#353535"));
     private static readonly IBrush SelectionFill = new SolidColorBrush(Color.Parse("#17353535"));
-    private static readonly IBrush WashFill = new SolidColorBrush(Color.Parse("#240078D4"));
+    internal static readonly IBrush WashFill = new Avalonia.Media.Immutable.ImmutableSolidColorBrush(Color.Parse("#663A3A3A"));
     private static readonly Pen SelectionPen = new(Accent, 1);
     private static readonly Pen ActivePen = new(Accent, 2);
     private static readonly Avalonia.Animation.Easings.SplineEasing WashEasing = new(0, 0, 0.58, 1);
+
+    internal static double GetFlashWash(double elapsed) => elapsed < FlashFadeInMilliseconds
+        ? WashEasing.Ease(Math.Clamp(elapsed / FlashFadeInMilliseconds, 0, 1))
+        : 1 - WashEasing.Ease(Math.Clamp(
+            (elapsed - FlashFadeInMilliseconds) / (FlashDurationMilliseconds - FlashFadeInMilliseconds), 0, 1));
 
     public DataGridSelectionOverlay(DataGrid grid)
     {
@@ -4000,10 +4150,7 @@ internal sealed class DataGridSelectionOverlay : Control
             return;
         var rectangles = new Dictionary<int, Rect>();
         var elapsed = Math.Max(0, now - _flashStart);
-        var wash = elapsed < FlashFadeInMilliseconds
-            ? WashEasing.Ease(elapsed / FlashFadeInMilliseconds)
-            : 1 - WashEasing.Ease(Math.Clamp(
-                (elapsed - FlashFadeInMilliseconds) / (FlashDurationMilliseconds - FlashFadeInMilliseconds), 0, 1));
+        var wash = GetFlashWash(elapsed);
         Rect? active = null;
         var activeRegion = 0;
         // Geometry belongs to logical cells, not recycled row controls. Keep spring
@@ -4037,18 +4184,50 @@ internal sealed class DataGridSelectionOverlay : Control
 
         if (wash > 0 && firstVisibleRow <= lastVisibleRow)
         {
-            for (var row = firstVisibleRow; row <= lastVisibleRow; row++)
+            foreach (var row in Enumerable.Range(firstVisibleRow, lastVisibleRow - firstVisibleRow + 1))
             {
                 var y = row * rowHeight - _grid.VerticalOffset;
-                foreach (var (column, geometry) in columnRects)
+                var runColumn = -1;
+                var previousColumn = -1;
+                var runX = 0d;
+                var runRight = 0d;
+                var runRegion = 0;
+
+                void DrawRun()
                 {
-                    if (!_flash.Contains(new DataGridCellPosition(row, column)))
-                        continue;
-                    var rect = new Rect(geometry.X, y, geometry.Width, rowHeight);
-                    using var clip = context.PushClip(RegionClip(geometry.Region));
+                    if (runColumn < 0)
+                        return;
+
+                    var rect = new Rect(runX, y, runRight - runX, rowHeight);
+                    using var clip = context.PushClip(RegionClip(runRegion));
                     using var opacity = context.PushOpacity(wash);
                     context.DrawRectangle(WashFill, null, rect);
+                    runColumn = -1;
                 }
+
+                foreach (var column in columnRects.Keys.OrderBy(index => index))
+                {
+                    if (!_flash.Contains(new DataGridCellPosition(row, column)))
+                    {
+                        DrawRun();
+                        previousColumn = -1;
+                        continue;
+                    }
+
+                    var geometry = columnRects[column];
+                    if (runColumn < 0 || column != previousColumn + 1 || geometry.Region != runRegion)
+                    {
+                        DrawRun();
+                        runColumn = column;
+                        runX = geometry.X;
+                        runRegion = geometry.Region;
+                    }
+
+                    runRight = geometry.X + geometry.Width;
+                    previousColumn = column;
+                }
+
+                DrawRun();
             }
         }
 

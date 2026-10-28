@@ -1,6 +1,7 @@
 ﻿using Avalonia.Controls;
 using Avalonia.Interactivity;
 using Avalonia.Threading;
+using Avalonia.VisualTree;
 using AcrfAnnotationTool.ViewModels;
 using AcrfAnnotationTool.ViewModels.Documents;
 using Window = AtomUI.Desktop.Controls.Window;
@@ -102,6 +103,11 @@ public partial class MainWindow : Window
     {
         _isShutdownConfirmationPending = false;
         CloseShutdownConfirmation();
+        var editor = this.GetVisualDescendants().OfType<AcrfEditorView>().FirstOrDefault();
+        if (editor != null && !editor.TrySaveDockLayout(out var error))
+        {
+            System.Diagnostics.Trace.TraceWarning($"布局保存失败：{error}");
+        }
         _allowClose = true;
         Close();
     }

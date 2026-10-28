@@ -164,6 +164,17 @@ public partial class AcrfDocumentViewModel : ObservableObject
         }
     }
 
+    public bool TryReplayAnnotationHistory(bool redo)
+    {
+        if (_annotationGrid is not { IsEditing: false, IsReadOnly: false } grid ||
+            !(redo ? grid.CanRedo : grid.CanUndo))
+            return false;
+
+        if (redo) grid.Redo();
+        else grid.Undo();
+        return true;
+    }
+
     [RelayCommand]
     private async Task OpenPdfAsync() => await OpenPdfWithResultAsync();
 
@@ -457,11 +468,13 @@ public partial class AcrfDocumentViewModel : ObservableObject
         }
         GenerateDomainAnnotations();
 
-        var settings = new ApplicationSettings(
-            horizontalOffset,
-            verticalOffset,
-            isPdfAnnotationEditingEnabled,
-            language);
+        var settings = ApplicationSettingsStore.Load() with
+        {
+            DomainAnnotationHorizontalOffset = horizontalOffset,
+            DomainAnnotationVerticalOffset = verticalOffset,
+            IsPdfAnnotationEditingEnabled = isPdfAnnotationEditingEnabled,
+            Language = language
+        };
         if (ApplicationSettingsStore.TrySave(settings, out var error))
         {
             var editingStatus = isPdfAnnotationEditingEnabled ? "允许" : "禁止";

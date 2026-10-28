@@ -22,18 +22,19 @@
             Margin="8,8,8,4"
             Padding="12,8">
             <StackPanel Orientation="Horizontal" Spacing="8">
-                <controls:ExpandingButtonGroup Label="文件操作" DefaultExpandedItem="{Binding #ExportSpecButton}">
-                    <controls:ExpandingButtonGroupItem x:Name="OpenPdfButton" Label="aCRF 导入" DoneLabel="已导入"
-                                                       Icon="{antd-icons:AntDesignIconProvider Kind=FilePdfOutlined}" />
-                    <controls:ExpandingButtonGroupItem x:Name="ImportSpecButton" Label="Spec 导入" DoneLabel="已导入"
-                                                       Icon="{antd-icons:AntDesignIconProvider Kind=ImportOutlined}" />
-                    <controls:ExpandingButtonGroupItem x:Name="ExportSpecButton" Label="Spec 导出" DoneLabel="已导出"
-                                                       Icon="{antd-icons:AntDesignIconProvider Kind=ExportOutlined}" />
-                    <controls:ExpandingButtonGroupItem x:Name="SavePdfButton" Label="另存 PDF" DoneLabel="已保存"
-                                                       Icon="{antd-icons:AntDesignIconProvider Kind=SaveOutlined}" />
-                    <controls:ExpandingButtonGroupItem x:Name="SavePdfFlattenButton" Label="另存 PDF 并 Flatten" DoneLabel="已保存"
-                                                       Icon="{antd-icons:AntDesignIconProvider Kind=FileProtectOutlined}" />
-                </controls:ExpandingButtonGroup>
+                <controls:ButtonGroup Label="文件操作">
+                    <controls:ButtonGroupItem x:Name="OpenPdfButton" Label="aCRF 导入" DoneLabel="已导入"
+                                              Icon="{antd-icons:AntDesignIconProvider Kind=FilePdfOutlined}" />
+                    <controls:ButtonGroupItem x:Name="ImportSpecButton" Label="Spec 导入" DoneLabel="已导入"
+                                              Icon="{antd-icons:AntDesignIconProvider Kind=ImportOutlined}" />
+                    <controls:ButtonGroupItem x:Name="ExportSpecButton" Label="Spec 导出" DoneLabel="已导出"
+                                              Icon="{antd-icons:AntDesignIconProvider Kind=ExportOutlined}" />
+                    <controls:ButtonGroupItem x:Name="SavePdfButton" Label="另存 PDF" DoneLabel="已保存"
+                                              Icon="{antd-icons:AntDesignIconProvider Kind=SaveOutlined}" />
+                    <controls:ButtonGroupItem x:Name="SavePdfFlattenButton" Label="另存 PDF 并 Flatten"
+                                              DoneLabel="已保存"
+                                              Icon="{antd-icons:AntDesignIconProvider Kind=FileProtectOutlined}" />
+                </controls:ButtonGroup>
                 <atom:IconButton
                     Click="OnDomainAnnotationSettingsClick"
                     Icon="{antd-icons:AntDesignIconProvider Kind=SettingOutlined}"

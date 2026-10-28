@@ -54,21 +54,13 @@ public class DataGridCell : Control
     private object? _uneditedValue;
     private bool _built;
 
-    // Undo/redo feedback: a dark grey wash painted over the cell content. The cell owns it so a
+    // Undo/redo feedback: the clipboard wash painted over the cell content. The cell owns it so a
     // viewport refresh during a history replay cannot drop it, and it is drawn instead of being
     // composited, so every frame is guaranteed to land.
     private HistoryFlashLayer? _historyFlashLayer;
     private DispatcherTimer? _historyFlashTimer;
     private long _historyFlashStarted;
     private double _historyFlashWash;
-    private const double HistoryFlashFadeInMilliseconds = 120;
-    private const double HistoryFlashHoldMilliseconds = 320;
-    private const double HistoryFlashFadeOutMilliseconds = 880;
-    private const double HistoryFlashDurationMilliseconds =
-        HistoryFlashFadeInMilliseconds + HistoryFlashHoldMilliseconds + HistoryFlashFadeOutMilliseconds;
-    private const byte HistoryFlashAlpha = 0x66;
-    private static readonly Color HistoryFlashColor = Color.Parse("#3A3A3A");
-    private static readonly Avalonia.Animation.Easings.SplineEasing HistoryFlashFadeOutEasing = new(0.42, 0, 1, 1);
 
     // Validation icon (ProDataGrid Path-based style)
     private Grid? _innerPanel;
@@ -309,7 +301,7 @@ public class DataGridCell : Control
     }
 
     /// <summary>
-    /// Plays the undo/redo wash on this cell: quick fade in, a short hold, then a slow fade out.
+    /// Plays the same gray fade-in/fade-out wash as clipboard feedback on this cell.
     /// The cell owns the layer so a viewport refresh during a history replay cannot drop it.
     /// </summary>
     internal void FlashHistoryChange()
@@ -329,23 +321,13 @@ public class DataGridCell : Control
     private void AdvanceHistoryFlash()
     {
         var elapsed = Stopwatch.GetElapsedTime(_historyFlashStarted).TotalMilliseconds;
-        if (elapsed >= HistoryFlashDurationMilliseconds)
+        if (elapsed >= DataGridSelectionOverlay.FlashDurationMilliseconds)
         {
             StopHistoryFlash();
             return;
         }
 
-        double wash;
-        if (elapsed < HistoryFlashFadeInMilliseconds)
-            wash = elapsed / HistoryFlashFadeInMilliseconds;
-        else if (elapsed < HistoryFlashFadeInMilliseconds + HistoryFlashHoldMilliseconds)
-            wash = 1;
-        else
-            wash = 1 - HistoryFlashFadeOutEasing.Ease(Math.Clamp(
-                (elapsed - HistoryFlashFadeInMilliseconds - HistoryFlashHoldMilliseconds) /
-                HistoryFlashFadeOutMilliseconds, 0, 1));
-
-        _historyFlashWash = Math.Clamp(wash, 0, 1);
+        _historyFlashWash = DataGridSelectionOverlay.GetFlashWash(elapsed);
         _historyFlashLayer?.InvalidateVisual();
     }
 
@@ -608,18 +590,15 @@ public class DataGridCell : Control
         return idx < grid.LeftFrozenColumnCount || idx >= grid.Columns.Count - grid.RightFrozenColumnCount;
     }
 
-    // Draws the wash itself, with the fade baked into the brush alpha, so no compositor layer or
-    // child-visual bookkeeping stands between the animation and the screen.
+    // Draws the shared clipboard wash over the content without a separate compositor animation.
     private sealed class HistoryFlashLayer(DataGridCell owner) : Control
     {
         public override void Render(DrawingContext context)
         {
             var wash = owner._historyFlashWash;
             if (wash <= 0) return;
-            var alpha = (byte)Math.Clamp(HistoryFlashAlpha * wash, 0, 255);
-            var brush = new ImmutableSolidColorBrush(
-                Color.FromArgb(alpha, HistoryFlashColor.R, HistoryFlashColor.G, HistoryFlashColor.B));
-            context.FillRectangle(brush, new Rect(Bounds.Size));
+            using var opacity = context.PushOpacity(wash);
+            context.FillRectangle(DataGridSelectionOverlay.WashFill, new Rect(Bounds.Size));
         }
     }
 }

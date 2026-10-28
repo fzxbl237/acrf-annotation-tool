@@ -62,6 +62,7 @@ public sealed class Dock : UserControl
     private readonly TextBlock _title;
     private readonly AtomIconButton _floatButton;
     private AtomWindow? _floatingWindow;
+    private DockLayoutState? _floatingState;
     private Window? _dragProxy;
     private Window? _owner;
     private Action? _stopDockAnimation;
@@ -197,6 +198,44 @@ public sealed class Dock : UserControl
     public DockSide? PreviewSide { get; private set; }
     public event EventHandler? LayoutChanged;
 
+    public DockLayoutState CaptureLayoutState()
+    {
+        CaptureFloatingState();
+        return new DockLayoutState(Layout, _lastDocked, _side, _horizontalRatio, _verticalRatio,
+            IsPaneOpen, _floatingState?.FloatingX, _floatingState?.FloatingY,
+            _floatingState?.FloatingWidth ?? 340, _floatingState?.FloatingHeight ?? 360,
+            _floatingState?.FloatingMaximized ?? false);
+    }
+
+    public void RestoreLayoutState(DockLayoutState state)
+    {
+        if (!Enum.IsDefined(state.Layout) || !Enum.IsDefined(state.LastDocked) ||
+            state.LastDocked == DockLayout.Floating || !Enum.IsDefined(state.Side)) return;
+        _horizontalRatio = double.IsFinite(state.HorizontalRatio) ? Math.Clamp(state.HorizontalRatio, 0.05, 0.95) : 0.5;
+        _verticalRatio = double.IsFinite(state.VerticalRatio) ? Math.Clamp(state.VerticalRatio, 0.05, 0.95) : 0.5;
+        _side = state.Side;
+        _lastDocked = state.LastDocked;
+        _floatingState = state;
+        SetCurrentValue(IsPaneOpenProperty, state.IsPaneOpen);
+        if (Layout == state.Layout) BuildLayout();
+        else SetCurrentValue(LayoutProperty, state.Layout);
+    }
+
+    private void CaptureFloatingState()
+    {
+        if (_floatingWindow is not { } window) return;
+        if (window.WindowState != WindowState.Normal)
+        {
+            _floatingState = (_floatingState ?? new DockLayoutState()) with
+            {
+                FloatingMaximized = window.WindowState == WindowState.Maximized
+            };
+            return;
+        }
+        _floatingState = new DockLayoutState(FloatingX: window.Position.X, FloatingY: window.Position.Y,
+            FloatingWidth: window.ClientSize.Width, FloatingHeight: window.ClientSize.Height);
+    }
+
     public void DockTo(DockSide side)
     {
         if (!Enum.IsDefined(side)) throw new ArgumentOutOfRangeException(nameof(side));
@@ -312,7 +351,23 @@ public sealed class Dock : UserControl
             _floatingWindow = window;
             window.Closed += FloatingClosed;
             window.Deactivated += FloatingDeactivated;
+            var saved = _floatingState;
+            if (saved != null)
+            {
+                window.Width = double.IsFinite(saved.FloatingWidth) ? Math.Clamp(saved.FloatingWidth, 280, 10000) : 340;
+                window.Height = double.IsFinite(saved.FloatingHeight) ? Math.Clamp(saved.FloatingHeight, 240, 10000) : 360;
+                if (saved.FloatingX is { } x && saved.FloatingY is { } y &&
+                    window.Screens.All.Any(screen => screen.WorkingArea.Contains(new PixelPoint(x + 80, y + 20))))
+                {
+                    window.WindowStartupLocation = WindowStartupLocation.Manual;
+                    window.Position = new PixelPoint(x, y);
+                }
+            }
             window.Show(_owner);
+            CaptureFloatingState();
+            window.PositionChanged += (_, _) => CaptureFloatingState();
+            window.SizeChanged += (_, _) => CaptureFloatingState();
+            if (saved?.FloatingMaximized == true) window.WindowState = WindowState.Maximized;
             return;
         }
         _floatButton.Icon = new ArrowUpOutlined { RenderTransform = new RotateTransform(45),
@@ -654,6 +709,7 @@ public sealed class Dock : UserControl
     private void FloatingClosed(object? sender, EventArgs e)
     {
         if (sender is not Window window || !ReferenceEquals(window, _floatingWindow)) return;
+        CaptureFloatingState();
         CancelDrag();
         window.Content = null;
         window.Closed -= FloatingClosed;
@@ -667,6 +723,7 @@ public sealed class Dock : UserControl
     private void CloseFloating()
     {
         if (_floatingWindow is not { } window) return;
+        CaptureFloatingState();
         _floatingWindow = null;
         window.Closed -= FloatingClosed;
         window.Deactivated -= FloatingDeactivated;
