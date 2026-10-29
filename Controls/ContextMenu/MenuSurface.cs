@@ -354,7 +354,7 @@ public class MenuSurface : HeaderedItemsControl
             ((ISetLogicalParent)popup).SetParent(target);
         }
         popup.PlacementTarget = target;
-        popup.OverlayInputPassThroughElement = target;
+        popup.OverlayInputPassThroughElement = ParentMenu ?? target;
         popup.Configure(Variant, Side, Alignment, AnchorGap, _anchorPoint);
         SetActive(null, false, animate: false);
         _popupOpen = true;
@@ -428,6 +428,7 @@ public class MenuSurface : HeaderedItemsControl
 
     private void OnPopupClosed(object? sender, EventArgs e)
     {
+        _submenu?.Close(false);
         var wasClosing = _closing;
         _closing = false;
         _popupOpen = false;
@@ -535,7 +536,8 @@ public class MenuSurface : HeaderedItemsControl
     }
 
     private bool IsInside(object? source) =>
-        source is Visual visual && (ReferenceEquals(visual, this) || this.IsVisualAncestorOf(visual));
+        source is Visual visual && (ReferenceEquals(visual, this) || this.IsVisualAncestorOf(visual)) ||
+        _submenu is { IsOpen: true } submenu && submenu.IsInside(source);
 
     private void OnTopLevelPointerPressed(object? sender, PointerPressedEventArgs e)
     {
@@ -753,6 +755,14 @@ public class MenuSurface : HeaderedItemsControl
                 e.Handled = true;
                 Close(returnFocus: true);
                 return;
+            case Key.Left when ParentMenu is not null:
+                e.Handled = true;
+                Close(returnFocus: true);
+                return;
+            case Key.Right when _active is { HasSubmenu: true } entry:
+                e.Handled = true;
+                OpenSubmenu(entry);
+                return;
             case Key.Left:
             case Key.Right:
                 if (_active is { } row && row.HandleMenuKey(e))
@@ -793,8 +803,19 @@ public class MenuSurface : HeaderedItemsControl
 
     internal void OpenSubmenu(MenuEntry entry)
     {
-        _submenu?.Close(false);
-        _submenu = new MenuSurface { Variant = MenuSurfaceVariant.Context, ParentMenu = this };
+        if (_submenu is { } previous)
+        {
+            previous.Close(false);
+            previous.Items.Clear();
+        }
+        // A submenu opens beside its row, not below the parent panel.
+        _submenu = new MenuSurface
+        {
+            Variant = Variant,
+            ParentMenu = this,
+            FocusReturnTarget = entry,
+            Side = MenuSide.Right
+        };
         foreach (var item in entry.Items) _submenu.Items.Add(item);
         _submenu.OpenAt(entry, new Point(entry.Bounds.Width, 0), MenuOpenFocus.First);
     }
@@ -821,7 +842,9 @@ public class MenuSurface : HeaderedItemsControl
         RaiseEvent(new MenuEntryClickedEventArgs(ItemClickedEvent, entry, item));
         if (!entry.StaysOpenOnClick && IsOpen)
         {
-            Close(returnFocus: true);
+            var root = this;
+            while (root.ParentMenu is { } parent) root = parent;
+            root.Close(returnFocus: true);
         }
     }
 

@@ -9,6 +9,16 @@ public sealed partial class Annotation : ObservableObject, ICloneable, INotifyDa
 {
     private const string NotSubmittedAnnotationText = "[NOT SUBMITTED]";
 
+    public static IReadOnlyList<string> CalloutShapes { get; } = Array.AsReadOnly(new[]
+    {
+        "LeftBracket",
+        "RightBracket",
+        "TopBracket",
+        "BottomBracket",
+        "OpenArrow",
+        "Rectangle"
+    });
+
     [ObservableProperty]
     private string? _formName;
 
@@ -32,6 +42,30 @@ public sealed partial class Annotation : ObservableObject, ICloneable, INotifyDa
 
     [ObservableProperty]
     private bool _annotationDotted;
+
+    [ObservableProperty]
+    private bool _calloutEnabled;
+
+    [ObservableProperty]
+    private string _calloutShape = string.Empty;
+
+    [ObservableProperty]
+    private bool _calloutIsLeft = true;
+
+    [ObservableProperty]
+    private double _calloutX;
+
+    [ObservableProperty]
+    private double _calloutY1;
+
+    [ObservableProperty]
+    private double _calloutY2;
+
+    [ObservableProperty]
+    private double _calloutArmLength = 8;
+
+    [ObservableProperty]
+    private double _calloutWidth = 40;
 
     [ObservableProperty]
     private int _x;

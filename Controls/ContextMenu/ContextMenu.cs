@@ -324,7 +324,7 @@ public class ContextMenu : ContentControl
 
         private void OnContextRequested(object? sender, ContextRequestedEventArgs e)
         {
-            if (e.Handled)
+            if (e.Handled || !_surface.IsEnabled)
             {
                 return;
             }

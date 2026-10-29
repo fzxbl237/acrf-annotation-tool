@@ -771,6 +771,30 @@ public partial class AcrfDocumentViewModel : ObservableObject
         }
     }
 
+    private static void CopyCalloutToModel(Annotation row, FreeTextAnnotationModel model)
+    {
+        model.CalloutEnabled = row.CalloutEnabled;
+        model.CalloutShape = row.CalloutShape;
+        model.CalloutWidth = row.CalloutWidth;
+        model.CalloutIsLeft = row.CalloutIsLeft;
+        model.CalloutX = row.CalloutX;
+        model.CalloutY1 = row.CalloutY1;
+        model.CalloutY2 = row.CalloutY2;
+        model.CalloutArmLength = row.CalloutArmLength;
+    }
+
+    private static void CopyCalloutToAnnotation(FreeTextAnnotationModel model, Annotation row)
+    {
+        row.CalloutEnabled = model.CalloutEnabled;
+        row.CalloutShape = model.EffectiveCalloutShape;
+        row.CalloutWidth = model.CalloutWidth;
+        row.CalloutIsLeft = model.CalloutIsLeft;
+        row.CalloutX = model.CalloutX;
+        row.CalloutY1 = model.CalloutY1;
+        row.CalloutY2 = model.CalloutY2;
+        row.CalloutArmLength = model.CalloutArmLength;
+    }
+
     private void SyncRowsToPdf(IEnumerable<Annotation> rows)
     {
         if (_viewer is null) return;
@@ -799,6 +823,14 @@ public partial class AcrfDocumentViewModel : ObservableObject
                         BorderStyle = row.AnnotationDotted
                             ? PdfViewerControl.Models.AnnotationBorderStyle.Dashed
                             : PdfViewerControl.Models.AnnotationBorderStyle.Solid,
+                        CalloutEnabled = row.CalloutEnabled,
+                        CalloutShape = row.CalloutShape,
+                        CalloutIsLeft = row.CalloutIsLeft,
+                        CalloutX = row.CalloutX,
+                        CalloutY1 = row.CalloutY1,
+                        CalloutY2 = row.CalloutY2,
+                        CalloutArmLength = row.CalloutArmLength,
+                        CalloutWidth = row.CalloutWidth,
                         BackgroundColorHex = GetAnnotationDomainColor(row, domains)
                     };
                 })
@@ -826,6 +858,7 @@ public partial class AcrfDocumentViewModel : ObservableObject
             updateStatus: false,
             id: row.AnnotationUniqueId);
         if (model is null) return;
+        CopyCalloutToModel(row, model);
         model.BorderStyle = row.AnnotationDotted
             ? PdfViewerControl.Models.AnnotationBorderStyle.Dashed
             : PdfViewerControl.Models.AnnotationBorderStyle.Solid;
@@ -847,6 +880,7 @@ public partial class AcrfDocumentViewModel : ObservableObject
             row.X = (int)Math.Round(e.Annotation.PdfX);
             row.Y = (int)Math.Round(e.Annotation.PdfY);
             row.Line = GetAnnotationLineCount(e.Annotation.Height);
+            CopyCalloutToAnnotation(e.Annotation, row);
             RefreshAllAnnotationColors();
         }
         finally { _synchronizing = false; }
@@ -995,7 +1029,10 @@ public partial class AcrfDocumentViewModel : ObservableObject
                 e.PropertyName == nameof(Annotation.Y))
             {
                 if (row.PageNum > 0)
+                {
                     _viewer.UpdateAnnotationPosition(row.AnnotationUniqueId, row.PageNum - 1, row.X, row.Y);
+                    _viewer.UpdateAnnotation(row.AnnotationUniqueId, model => CopyCalloutToModel(row, model));
+                }
                 if (e.PropertyName == nameof(Annotation.PageNum))
                     RefreshAllAnnotationColors();
                 return;
@@ -1007,6 +1044,28 @@ public partial class AcrfDocumentViewModel : ObservableObject
                     row.AnnotationUniqueId,
                     GetAnnotationWidth(row),
                     GetAnnotationHeight(row.Line));
+                _viewer.UpdateAnnotation(row.AnnotationUniqueId, model => CopyCalloutToModel(row, model));
+                return;
+            }
+
+            if (e.PropertyName == nameof(Annotation.CalloutEnabled) ||
+                e.PropertyName == nameof(Annotation.CalloutShape) ||
+                e.PropertyName == nameof(Annotation.CalloutIsLeft) ||
+                e.PropertyName == nameof(Annotation.CalloutX) ||
+                e.PropertyName == nameof(Annotation.CalloutY1) ||
+                e.PropertyName == nameof(Annotation.CalloutY2) ||
+                e.PropertyName == nameof(Annotation.CalloutArmLength) ||
+                e.PropertyName == nameof(Annotation.CalloutWidth))
+            {
+                if (e.PropertyName == nameof(Annotation.CalloutEnabled) && row.CalloutEnabled &&
+                    row.CalloutX == 0 && row.CalloutY1 == 0 && row.CalloutY2 == 0)
+                {
+                    row.CalloutX = Math.Max(8, row.X - 40);
+                    row.CalloutY1 = row.Y + GetAnnotationHeight(row.Line) / 2 + 36;
+                    row.CalloutY2 = Math.Max(0, row.CalloutY1 - 72);
+                    if (string.IsNullOrWhiteSpace(row.CalloutShape)) row.CalloutShape = row.CalloutIsLeft ? "LeftBracket" : "RightBracket";
+                }
+                _viewer.UpdateAnnotation(row.AnnotationUniqueId, model => CopyCalloutToModel(row, model));
                 return;
             }
 
@@ -1054,6 +1113,7 @@ public partial class AcrfDocumentViewModel : ObservableObject
                 {
                     model.Text = row.AnnotationText;
                     model.Width = GetAnnotationWidth(row);
+                    CopyCalloutToModel(row, model);
                     model.BackgroundColorHex = GetAnnotationDomainColor(row);
                 }))
                 CreatePdfAnnotation(row);
@@ -1085,6 +1145,14 @@ public partial class AcrfDocumentViewModel : ObservableObject
             Y = (int)Math.Round(model.PdfY),
             Width = 0,
             Line = GetAnnotationLineCount(model.Height),
+            CalloutEnabled = model.CalloutEnabled,
+            CalloutShape = model.EffectiveCalloutShape,
+            CalloutWidth = model.CalloutWidth,
+            CalloutIsLeft = model.CalloutIsLeft,
+            CalloutX = model.CalloutX,
+            CalloutY1 = model.CalloutY1,
+            CalloutY2 = model.CalloutY2,
+            CalloutArmLength = model.CalloutArmLength,
             AnnotationText = annotationText,
             Type = "Variable"
         };
@@ -1120,6 +1188,7 @@ public partial class AcrfDocumentViewModel : ObservableObject
             row.X = (int)Math.Round(e.Annotation.PdfX);
             row.Y = (int)Math.Round(e.Annotation.PdfY);
             row.Line = GetAnnotationLineCount(e.Annotation.Height);
+            CopyCalloutToAnnotation(e.Annotation, row);
 
             var annotationText = FreeTextAnnotationControl.IsPlaceholderContent(e.Annotation.Text)
                 ? string.Empty

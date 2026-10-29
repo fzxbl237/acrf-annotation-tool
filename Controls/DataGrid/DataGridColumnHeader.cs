@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using Avalonia;
@@ -311,12 +311,19 @@ public class DataGridColumnHeader : Control
     {
         var content = new StackPanel
         {
-            Width = 220,
-            MaxHeight = 420,
+            Width = 320,
             Spacing = 6,
             Margin = new Thickness(10),
         };
 
+        var columnList = new StackPanel { Spacing = 6 };
+        var columnScroll = new ScrollViewer
+        {
+            MaxHeight = 420,
+            VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+            HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
+            Content = columnList,
+        };
         content.Children.Add(new TextBlock
         {
             Text = "列选择",
@@ -325,6 +332,8 @@ public class DataGridColumnHeader : Control
             Foreground = new SolidColorBrush(Color.Parse("#1A1A1A")),
             Margin = new Thickness(0, 0, 0, 4),
         });
+
+        content.Children.Add(columnScroll);
 
         foreach (var column in grid.Columns)
         {
@@ -348,7 +357,7 @@ public class DataGridColumnHeader : Control
                     column.IsVisible = isVisible;
                 }
             };
-            content.Children.Add(checkBox);
+            columnList.Children.Add(checkBox);
         }
 
         var actionPanel = new StackPanel
@@ -385,6 +394,7 @@ public class DataGridColumnHeader : Control
     private static void SetAllVisible(DataGrid grid, bool visible)
     {
         if (grid == null) return;
+
         foreach (var column in grid.Columns)
         {
             if (column != null && column.CanUserHide)

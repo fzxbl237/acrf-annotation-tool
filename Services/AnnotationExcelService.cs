@@ -43,7 +43,15 @@ public static class AnnotationExcelService
         "宽度",
         "行数",
         "Form书签名称",
-        "注释唯一标识"
+        "注释唯一标识",
+        "Callout显示",
+        "Callout形状",
+        "Callout X",
+        "Callout Y1",
+        "Callout Y2",
+        "Callout臂长",
+        "Callout宽度",
+        "Callout是否左侧"
     ];
 
     public static async Task<IReadOnlyList<Annotation>> ImportAsync(
@@ -312,6 +320,14 @@ public static class AnnotationExcelService
             Line = ParseInt(GetValue(values, 11), defaultValue: 1),
             FormOutline = GetValue(values, 12),
             AnnotationUniqueId = EmptyToNull(GetValue(values, 13)) ?? Guid.NewGuid().ToString(),
+            CalloutEnabled = ParseBool(GetValue(values, 14)),
+            CalloutShape = GetValue(values, 15),
+            CalloutX = ParseDouble(GetValue(values, 16)),
+            CalloutY1 = ParseDouble(GetValue(values, 17)),
+            CalloutY2 = ParseDouble(GetValue(values, 18)),
+            CalloutArmLength = ParseDouble(GetValue(values, 19), defaultValue: 8),
+            CalloutWidth = ParseDouble(GetValue(values, 20), defaultValue: 40),
+            CalloutIsLeft = values.Count > 21 ? ParseBool(GetValue(values, 21)) : true,
         };
     }
 
@@ -349,6 +365,21 @@ public static class AnnotationExcelService
             return decimal.ToInt32(decimal.Truncate(decimalResult));
         if (int.TryParse(value.Trim(), NumberStyles.Integer, CultureInfo.CurrentCulture, out result))
             return result;
+        return defaultValue;
+    }
+
+    private static double ParseDouble(string value, double defaultValue = 0)
+    {
+        if (double.TryParse(
+                value.Trim(),
+                NumberStyles.Float | NumberStyles.AllowThousands,
+                CultureInfo.InvariantCulture,
+                out var result) &&
+            double.IsFinite(result))
+        {
+            return result;
+        }
+
         return defaultValue;
     }
 
@@ -519,6 +550,14 @@ public static class AnnotationExcelService
             await WriteIntegerCellAsync(writer, 11, rowNumber, annotation.Line).ConfigureAwait(false);
             await WriteInlineStringCellAsync(writer, 12, rowNumber, annotation.FormOutline).ConfigureAwait(false);
             await WriteInlineStringCellAsync(writer, 13, rowNumber, annotation.AnnotationUniqueId).ConfigureAwait(false);
+            await WriteBooleanCellAsync(writer, 14, rowNumber, annotation.CalloutEnabled).ConfigureAwait(false);
+            await WriteInlineStringCellAsync(writer, 15, rowNumber, annotation.CalloutShape).ConfigureAwait(false);
+            await WriteDoubleCellAsync(writer, 16, rowNumber, annotation.CalloutX).ConfigureAwait(false);
+            await WriteDoubleCellAsync(writer, 17, rowNumber, annotation.CalloutY1).ConfigureAwait(false);
+            await WriteDoubleCellAsync(writer, 18, rowNumber, annotation.CalloutY2).ConfigureAwait(false);
+            await WriteDoubleCellAsync(writer, 19, rowNumber, annotation.CalloutArmLength).ConfigureAwait(false);
+            await WriteDoubleCellAsync(writer, 20, rowNumber, annotation.CalloutWidth).ConfigureAwait(false);
+            await WriteBooleanCellAsync(writer, 21, rowNumber, annotation.CalloutIsLeft).ConfigureAwait(false);
             await writer.WriteEndElementAsync().ConfigureAwait(false);
         }
 
@@ -563,6 +602,23 @@ public static class AnnotationExcelService
         writer.WriteAttributeString("r", GetCellReference(columnIndex, rowNumber));
         await writer.WriteStartElementAsync(null, "v", MainNamespace).ConfigureAwait(false);
         await writer.WriteStringAsync(value.ToString(CultureInfo.InvariantCulture)).ConfigureAwait(false);
+        await writer.WriteEndElementAsync().ConfigureAwait(false);
+        await writer.WriteEndElementAsync().ConfigureAwait(false);
+    }
+
+    private static async Task WriteDoubleCellAsync(
+        XmlWriter writer,
+        int columnIndex,
+        int rowNumber,
+        double value)
+    {
+        if (!double.IsFinite(value))
+            value = 0;
+
+        await writer.WriteStartElementAsync(null, "c", MainNamespace).ConfigureAwait(false);
+        writer.WriteAttributeString("r", GetCellReference(columnIndex, rowNumber));
+        await writer.WriteStartElementAsync(null, "v", MainNamespace).ConfigureAwait(false);
+        await writer.WriteStringAsync(value.ToString("R", CultureInfo.InvariantCulture)).ConfigureAwait(false);
         await writer.WriteEndElementAsync().ConfigureAwait(false);
         await writer.WriteEndElementAsync().ConfigureAwait(false);
     }

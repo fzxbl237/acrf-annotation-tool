@@ -10,9 +10,9 @@
     <EnableTrimAnalyzer>true</EnableTrimAnalyzer>
     <RootNamespace>AcrfAnnotationTool</RootNamespace>
     <AssemblyName>AcrfAnnotationTool</AssemblyName>
-    <Version>0.45</Version>
-    <AssemblyVersion>0.45.0.0</AssemblyVersion>
-    <FileVersion>0.45.0.0</FileVersion>
+    <Version>0.46</Version>
+    <AssemblyVersion>0.46.0.0</AssemblyVersion>
+    <FileVersion>0.46.0.0</FileVersion>
   </PropertyGroup>
 
   <PropertyGroup Condition="'$(Configuration)' == 'Release' and '$(RuntimeIdentifier)' != '' and '$(PublishAot)' != 'false'">
@@ -22,7 +22,24 @@
   <PropertyGroup Condition="'$(PublishAot)' == 'true'">
     <TrimmerSingleWarn>false</TrimmerSingleWarn>
     <StripSymbols>true</StripSymbols>
+    <!-- 发行包默认不带符号：原生 PDB 约 370 MB，SkiaSharp/HarfBuzz 的 PDB 另有约 100 MB。
+         需要保留符号做崩溃分析时，用 -p:IncludeAotSymbols=true 重新发布。 -->
+    <DebugType Condition="'$(IncludeAotSymbols)' != 'true'">none</DebugType>
+    <DebugSymbols Condition="'$(IncludeAotSymbols)' != 'true'">false</DebugSymbols>
+    <CopyOutputSymbolsToPublishDirectory Condition="'$(IncludeAotSymbols)' != 'true'">false</CopyOutputSymbolsToPublishDirectory>
+    <!-- 把重复方法体折叠成一份数据，exe 约减少 8 MB，启动时间无明显变化 -->
+    <IlcDehydrate Condition="'$(IlcDehydrate)' == ''">true</IlcDehydrate>
   </PropertyGroup>
+
+  <!-- 兜底：即使某个包仍把 *.pdb 带进发布列表，也不输出到发行目录 -->
+  <Target Name="_RemoveAotPublishSymbols"
+          AfterTargets="ComputeResolvedFilesToPublishList"
+          Condition="'$(PublishAot)' == 'true' and '$(IncludeAotSymbols)' != 'true'">
+    <ItemGroup>
+      <_AotPublishPdb Include="@(ResolvedFileToPublish)" Condition="'%(Extension)' == '.pdb'" />
+      <ResolvedFileToPublish Remove="@(_AotPublishPdb)" />
+    </ItemGroup>
+  </Target>
 
   <ItemGroup>
     <Compile Remove="**/bin/**;**/obj/**" />
@@ -43,9 +60,25 @@
     <None Update="cdisc_setting.db"
           CopyToOutputDirectory="PreserveNewest"
           CopyToPublishDirectory="PreserveNewest" />
-    <AvaloniaResource Include="Fonts\*.otf" />
+    <!-- 只有下面几个字体被代码或主题实际引用：
+         ARIAL / ARIALBD / ARIALUNI 由 ProjectFontResolver 与注释文本测量按文件名读取，
+         AlibabaPuHuiTi 由 AcrfProjectFontCollection 以 avares 嵌入。
+         其余 Arial 变体（斜体、窄体、黑体）没有被引用，不再随输出复制。 -->
+    <AvaloniaResource Include="Fonts\AlibabaPuHuiTi-3-55-Regular.otf" />
     <AvaloniaResource Include="Fonts\ARIALUNI.TTF" />
-    <None Include="Fonts\**\*"
+    <None Include="Fonts\ARIAL.TTF"
+          CopyToOutputDirectory="PreserveNewest"
+          CopyToPublishDirectory="PreserveNewest" />
+    <None Include="Fonts\ARIALBD.TTF"
+          CopyToOutputDirectory="PreserveNewest"
+          CopyToPublishDirectory="PreserveNewest" />
+    <None Include="Fonts\ARIALUNI.TTF"
+          CopyToOutputDirectory="PreserveNewest"
+          CopyToPublishDirectory="PreserveNewest" />
+    <None Include="Fonts\AlibabaPuHuiTi-3-55-Regular.otf"
+          CopyToOutputDirectory="PreserveNewest"
+          CopyToPublishDirectory="PreserveNewest" />
+    <None Include="Fonts\iconfont.ttf"
           CopyToOutputDirectory="PreserveNewest"
           CopyToPublishDirectory="PreserveNewest" />
     <PackageReference Include="Docnet.Core" Version="2.6.0" />

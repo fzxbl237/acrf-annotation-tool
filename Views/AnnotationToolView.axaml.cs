@@ -31,6 +31,8 @@ public partial class AnnotationToolView : UserControl
     public AnnotationToolView()
     {
         InitializeComponent();
+        foreach (var column in AnnotationGrid.Columns.OfType<PatChes.Controls.DataGrid.DataGridComboBoxColumn>())
+            if (Equals(column.Header, "Callout形状")) column.ItemsSource = Annotation.CalloutShapes;
         AnnotationGrid.AddHandler(PointerPressedEvent, OnAnnotationGridPointerPressed, RoutingStrategies.Tunnel);
         DataContextChanged += OnDataContextChanged;
         AttachedToVisualTree += OnAttachedToVisualTree;
@@ -94,11 +96,12 @@ public partial class AnnotationToolView : UserControl
         adjustXItem.Click += (_, _) => OpenCoordinateDialog(row, CoordinateOperation.AdjustX);
         adjustYItem.Click += (_, _) => OpenCoordinateDialog(row, CoordinateOperation.AdjustY);
 
-        menu.Items.Add(deleteItem);
+
         menu.Items.Add(copyItem);
         menu.Items.Add(uppercaseItem);
         menu.Items.Add(adjustXItem);
         menu.Items.Add(adjustYItem);
+        menu.Items.Add(deleteItem);
         menu.OpenAt(row, e.GetPosition(row));
         e.Handled = true;
     }

@@ -95,6 +95,36 @@
                         Header="行数"
                         Minimum="1"
                         Width="80" />
+                    <dg:DataGridCheckBoxColumn
+                        Binding="{Binding CalloutEnabled}"
+                        Header="Callout显示"
+                        Width="100" />
+                    <dg:DataGridComboBoxColumn
+                        Binding="{Binding CalloutShape}"
+                        Header="Callout形状"
+                        Width="140" />
+                    <dg:DataGridNumericUpDownColumn
+                        Binding="{Binding CalloutX}"
+                        Header="Callout X"
+                        Width="100" />
+                    <dg:DataGridNumericUpDownColumn
+                        Binding="{Binding CalloutY1}"
+                        Header="Callout Y1"
+                        Width="100" />
+                    <dg:DataGridNumericUpDownColumn
+                        Binding="{Binding CalloutY2}"
+                        Header="Callout Y2"
+                        Width="100" />
+                    <dg:DataGridNumericUpDownColumn
+                        Binding="{Binding CalloutArmLength}"
+                        Header="Callout臂长"
+                        Minimum="1"
+                        Width="110" />
+                    <dg:DataGridNumericUpDownColumn
+                        Binding="{Binding CalloutWidth}"
+                        Header="Callout宽度"
+                        Minimum="1"
+                        Width="110" />
                 </dg:DataGrid.Columns>
             </dg:DataGrid>
         </Border>

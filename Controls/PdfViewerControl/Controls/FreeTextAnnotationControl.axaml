@@ -1,45 +1,52 @@
-﻿<UserControl xmlns="https://github.com/avaloniaui"
+<UserControl xmlns="https://github.com/avaloniaui"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:menus="using:AcrfAnnotationTool.Controls.Menus"
              x:Class="PdfViewerControl.Controls.FreeTextAnnotationControl"
              Background="Transparent"
              ClipToBounds="False"
              UseLayoutRounding="False">
-    <UserControl.ContextMenu>
-        <ContextMenu>
-            <MenuItem Header="Border">
-                <MenuItem x:Name="BorderSolidMenuItem" Header="Solid" ToggleType="CheckBox" Click="BorderSolidMenuItem_OnClick" />
-                <MenuItem x:Name="BorderDashedMenuItem" Header="Dashed" ToggleType="CheckBox" Click="BorderDashedMenuItem_OnClick" />
-            </MenuItem>
-            <MenuItem Header="Align">
-                <MenuItem x:Name="AlignHLeftMenuItem" Header="Left" ToggleType="CheckBox" Click="AlignHLeftMenuItem_OnClick" />
-                <MenuItem x:Name="AlignHCenterMenuItem" Header="Center" ToggleType="CheckBox" Click="AlignHCenterMenuItem_OnClick" />
-                <MenuItem x:Name="AlignHRightMenuItem" Header="Right" ToggleType="CheckBox" Click="AlignHRightMenuItem_OnClick" />
-                <Separator />
-                <MenuItem x:Name="AlignVTopMenuItem" Header="Top" ToggleType="CheckBox" Click="AlignVTopMenuItem_OnClick" />
-                <MenuItem x:Name="AlignVCenterMenuItem" Header="Middle" ToggleType="CheckBox" Click="AlignVCenterMenuItem_OnClick" />
-                <MenuItem x:Name="AlignVBottomMenuItem" Header="Bottom" ToggleType="CheckBox" Click="AlignVBottomMenuItem_OnClick" />
-            </MenuItem>
-            <MenuItem Header="Background">
-                <MenuItem x:Name="BgYellowMenuItem" Header="Yellow" Click="BgYellowMenuItem_OnClick" />
-                <MenuItem x:Name="BgGreenMenuItem" Header="Green" Click="BgGreenMenuItem_OnClick" />
-                <MenuItem x:Name="BgRedMenuItem" Header="Red" Click="BgRedMenuItem_OnClick" />
-                <MenuItem x:Name="BgBlueMenuItem" Header="Blue" Click="BgBlueMenuItem_OnClick" />
-                <MenuItem x:Name="BgWhiteMenuItem" Header="White" Click="BgWhiteMenuItem_OnClick" />
-            </MenuItem>
-            <MenuItem Header="Font">
-                <MenuItem x:Name="FontSize10MenuItem" Header="10" Click="FontSizeMenuItem_OnClick" Tag="10" />
-                <MenuItem x:Name="FontSize12MenuItem" Header="12" Click="FontSizeMenuItem_OnClick" Tag="12" />
-                <MenuItem x:Name="FontSize14MenuItem" Header="14" Click="FontSizeMenuItem_OnClick" Tag="14" />
-                <MenuItem x:Name="FontSize16MenuItem" Header="16" Click="FontSizeMenuItem_OnClick" Tag="16" />
-                <MenuItem x:Name="FontSize20MenuItem" Header="20" Click="FontSizeMenuItem_OnClick" Tag="20" />
-                <MenuItem x:Name="FontSize24MenuItem" Header="24" Click="FontSizeMenuItem_OnClick" Tag="24" />
-                <Separator />
-                <MenuItem x:Name="BoldMenuItem" Header="Bold" ToggleType="CheckBox" Click="BoldMenuItem_OnClick" />
-            </MenuItem>
-            <Separator />
-            <MenuItem Header="Delete" Click="DeleteMenuItem_OnClick" />
-        </ContextMenu>
-    </UserControl.ContextMenu>
+    <menus:ContextMenu.Menu>
+        <menus:MenuSurface x:Name="AnnotationMenu" Opened="ContextMenu_OnOpened">
+            <menus:MenuEntry Header="Border" InputGestureText="›"><menus:MenuEntry.Items>
+                <menus:MenuEntry x:Name="BorderSolidMenuItem" Header="Solid" ToggleType="CheckBox" Click="BorderSolidMenuItem_OnClick" />
+                <menus:MenuEntry x:Name="BorderDashedMenuItem" Header="Dashed" ToggleType="CheckBox" Click="BorderDashedMenuItem_OnClick" />
+            </menus:MenuEntry.Items></menus:MenuEntry>
+            <menus:MenuEntry Header="Callout" InputGestureText="›"><menus:MenuEntry.Items>
+                <menus:MenuEntry Header="Left bracket [" Click="CalloutLeftMenuItem_OnClick" />
+                <menus:MenuEntry Header="Right bracket ]" Click="CalloutRightMenuItem_OnClick" />
+                <menus:MenuEntry Header="Top bracket" CommandParameter="TopBracket" Click="CalloutShapeMenuItem_OnClick" />
+                <menus:MenuEntry Header="Bottom bracket" CommandParameter="BottomBracket" Click="CalloutShapeMenuItem_OnClick" />
+                <menus:MenuEntry Header="Open arrow" CommandParameter="OpenArrow" Click="CalloutShapeMenuItem_OnClick" />
+                <menus:MenuEntry Header="Rectangle" CommandParameter="Rectangle" Click="CalloutShapeMenuItem_OnClick" />
+                <menus:MenuEntry Header="Remove callout" Click="CalloutRemoveMenuItem_OnClick" />
+            </menus:MenuEntry.Items></menus:MenuEntry>
+            <menus:MenuEntry Header="Align" InputGestureText="›"><menus:MenuEntry.Items>
+                <menus:MenuEntry x:Name="AlignHLeftMenuItem" Header="Left" ToggleType="CheckBox" Click="AlignHLeftMenuItem_OnClick" />
+                <menus:MenuEntry x:Name="AlignHCenterMenuItem" Header="Center" ToggleType="CheckBox" Click="AlignHCenterMenuItem_OnClick" />
+                <menus:MenuEntry x:Name="AlignHRightMenuItem" Header="Right" ToggleType="CheckBox" Click="AlignHRightMenuItem_OnClick" />
+                <menus:MenuEntry x:Name="AlignVTopMenuItem" Header="Top" HasSeparatorBefore="True" ToggleType="CheckBox" Click="AlignVTopMenuItem_OnClick" />
+                <menus:MenuEntry x:Name="AlignVCenterMenuItem" Header="Middle" ToggleType="CheckBox" Click="AlignVCenterMenuItem_OnClick" />
+                <menus:MenuEntry x:Name="AlignVBottomMenuItem" Header="Bottom" ToggleType="CheckBox" Click="AlignVBottomMenuItem_OnClick" />
+            </menus:MenuEntry.Items></menus:MenuEntry>
+            <menus:MenuEntry Header="Background" InputGestureText="›"><menus:MenuEntry.Items>
+                <menus:MenuEntry x:Name="BgYellowMenuItem" Header="Yellow" Click="BgYellowMenuItem_OnClick" />
+                <menus:MenuEntry x:Name="BgGreenMenuItem" Header="Green" Click="BgGreenMenuItem_OnClick" />
+                <menus:MenuEntry x:Name="BgRedMenuItem" Header="Red" Click="BgRedMenuItem_OnClick" />
+                <menus:MenuEntry x:Name="BgBlueMenuItem" Header="Blue" Click="BgBlueMenuItem_OnClick" />
+                <menus:MenuEntry x:Name="BgWhiteMenuItem" Header="White" Click="BgWhiteMenuItem_OnClick" />
+            </menus:MenuEntry.Items></menus:MenuEntry>
+            <menus:MenuEntry Header="Font" InputGestureText="›"><menus:MenuEntry.Items>
+                <menus:MenuEntry x:Name="FontSize10MenuItem" Header="10" Click="FontSizeMenuItem_OnClick" CommandParameter="10" />
+                <menus:MenuEntry x:Name="FontSize12MenuItem" Header="12" Click="FontSizeMenuItem_OnClick" CommandParameter="12" />
+                <menus:MenuEntry x:Name="FontSize14MenuItem" Header="14" Click="FontSizeMenuItem_OnClick" CommandParameter="14" />
+                <menus:MenuEntry x:Name="FontSize16MenuItem" Header="16" Click="FontSizeMenuItem_OnClick" CommandParameter="16" />
+                <menus:MenuEntry x:Name="FontSize20MenuItem" Header="20" Click="FontSizeMenuItem_OnClick" CommandParameter="20" />
+                <menus:MenuEntry x:Name="FontSize24MenuItem" Header="24" Click="FontSizeMenuItem_OnClick" CommandParameter="24" />
+                <menus:MenuEntry x:Name="BoldMenuItem" Header="Bold" HasSeparatorBefore="True" ToggleType="CheckBox" Click="BoldMenuItem_OnClick" />
+            </menus:MenuEntry.Items></menus:MenuEntry>
+            <menus:MenuEntry Header="Delete" IsDestructive="True" HasSeparatorBefore="True" Click="DeleteMenuItem_OnClick" />
+        </menus:MenuSurface>
+    </menus:ContextMenu.Menu>
     <UserControl.Styles>
         <Style Selector="TextBox#Editor">
             <Setter Property="Background" Value="Transparent" />

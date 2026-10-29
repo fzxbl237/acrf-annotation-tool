@@ -2,7 +2,7 @@ using Avalonia;
 namespace PdfViewerControl.Controls.Annotation;
 internal static class AnnotationHandleGeometry
 {
-    private const double Pad = 9;
+    internal const double Pad = 18;
     private const double HitRadius = 16;
     public static bool TryHit(double left, double top, double width, double height, Point canvasPoint, out AnnotationResizeHandleKind kind)
     {

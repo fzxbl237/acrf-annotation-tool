@@ -48,7 +48,15 @@ public static partial class PdfAnnotationService
                     PdfY = r.Y1,
                     Width = Math.Max(40, r.Width),
                     Height = Math.Max(20, r.Height),
-                    Text = annotation.Contents ?? ""
+                    Text = annotation.Contents ?? "",
+                    CalloutEnabled = annotation.Elements.GetBoolean("/PdfViewerCalloutEnabled"),
+                    CalloutIsLeft = ReadOptionalBoolean(annotation, "/PdfViewerCalloutIsLeft", true),
+                    CalloutX = ReadOptionalReal(annotation, "/PdfViewerCalloutX"),
+                    CalloutY1 = ReadOptionalReal(annotation, "/PdfViewerCalloutY1"),
+                    CalloutY2 = ReadOptionalReal(annotation, "/PdfViewerCalloutY2"),
+                    CalloutArmLength = ReadOptionalReal(annotation, "/PdfViewerCalloutArmLength", 8),
+                    CalloutShape = annotation.Elements.GetString("/PdfViewerCalloutShape") ?? string.Empty,
+                    CalloutWidth = ReadOptionalReal(annotation, "/PdfViewerCalloutWidth", 40)
                 };
                 var da = annotation.Elements.GetString("/DA");
                 if (!string.IsNullOrWhiteSpace(da))
@@ -89,6 +97,7 @@ public static partial class PdfAnnotationService
             foreach (var a in page.Annotations.OfType<PdfAnnotation>()
                 .Where(IsFreeTextAnnotation).ToList())
                 page.Annotations.Remove(a);
+            RemoveCalloutCompanions(page);
         }
         foreach (var g in annotations.GroupBy(a => a.PageIndex))
         {
@@ -98,6 +107,14 @@ public static partial class PdfAnnotationService
                 var a = new PdfTextAnnotation { Contents = m.Text ?? "" };
                 a.Elements.SetName("/Subtype", "/FreeText");
                 a.Elements.SetString("/PdfViewerAnnotationId", m.Id);
+                a.Elements.SetBoolean("/PdfViewerCalloutEnabled", m.CalloutEnabled);
+                a.Elements.SetBoolean("/PdfViewerCalloutIsLeft", m.CalloutIsLeft);
+                a.Elements.SetReal("/PdfViewerCalloutX", m.CalloutX);
+                a.Elements.SetReal("/PdfViewerCalloutY1", m.CalloutY1);
+                a.Elements.SetReal("/PdfViewerCalloutY2", m.CalloutY2);
+                a.Elements.SetReal("/PdfViewerCalloutArmLength", m.CalloutArmLength);
+                a.Elements.SetString("/PdfViewerCalloutShape", m.CalloutShape);
+                a.Elements.SetReal("/PdfViewerCalloutWidth", m.CalloutWidth);
                 if (m.Id.StartsWith("__domain_", StringComparison.Ordinal))
                     a.Elements.SetBoolean("/PdfViewerDomainAnnotation", true);
                 a.Rectangle = new PdfRectangle(
@@ -123,6 +140,8 @@ public static partial class PdfAnnotationService
                 a.Elements.SetString("/PdfViewerTextAlignment",
                     AnnotationTextAlignmentHelper.Serialize(m.HorizontalTextAlignment, m.VerticalTextAlignment));
                 doc.Pages[g.Key].Annotations.Add(a);
+                if (m.CalloutEnabled)
+                    doc.Pages[g.Key].Annotations.Add(CreateCalloutCompanion(doc, m));
             }
         }
         doc.Save(dst);
@@ -149,6 +168,7 @@ public static partial class PdfAnnotationService
                 var x = model.PdfX;
                 var y = pageHeight - model.PdfY - model.Height;
                 DrawAnnotationAppearanceContent(graphics, model, x, y);
+                DrawCalloutLines(graphics, model, GetCalloutGeometry(model), 0, pageHeight);
             }
         }
 
@@ -158,9 +178,110 @@ public static partial class PdfAnnotationService
                          .Where(IsFreeTextAnnotation)
                          .ToList())
                 page.Annotations.Remove(annotation);
+            RemoveCalloutCompanions(page);
         }
 
         doc.Save(dst);
+    }
+
+    private static bool ReadOptionalBoolean(PdfAnnotation annotation, string key, bool defaultValue) =>
+        annotation.Elements.ContainsKey(key) ? annotation.Elements.GetBoolean(key) : defaultValue;
+
+    private static double ReadOptionalReal(PdfAnnotation annotation, string key, double defaultValue = 0) =>
+        annotation.Elements.ContainsKey(key) ? annotation.Elements.GetReal(key) : defaultValue;
+
+    private static void RemoveCalloutCompanions(PdfPage page)
+    {
+        foreach (var annotation in page.Annotations.OfType<PdfAnnotation>()
+                     .Where(IsCalloutCompanion)
+                     .ToList())
+            page.Annotations.Remove(annotation);
+    }
+
+    private static bool IsCalloutCompanion(PdfAnnotation annotation) =>
+        (string.Equals(annotation.Elements.GetString("/Subtype"), "/PolyLine", StringComparison.OrdinalIgnoreCase) ||
+         string.Equals(annotation.Elements.GetString("/Subtype"), "PolyLine", StringComparison.OrdinalIgnoreCase)) &&
+        annotation.Elements.ContainsKey("/PdfViewerCalloutOwner");
+
+    private static PdfTextAnnotation CreateCalloutCompanion(
+        PdfDocument document,
+        FreeTextAnnotationModel model)
+    {
+        var geometry = GetCalloutGeometry(model);
+        var annotation = new PdfTextAnnotation();
+        annotation.Elements.SetName("/Subtype", "/PolyLine");
+        annotation.Elements.SetString("/PdfViewerCalloutOwner", model.Id);
+        annotation.Elements.SetInteger("/F", 4);
+        annotation.Rectangle = geometry.Rectangle;
+        annotation.Elements.SetObject("/C", new PdfArray(document,
+            new PdfReal(1),
+            new PdfReal(0),
+            new PdfReal(0)));
+        var borderStyle = new PdfDictionary(document);
+        borderStyle.Elements.SetReal("/W", 1);
+        borderStyle.Elements.SetName("/S", "/S");
+        annotation.Elements.SetObject("/BS", borderStyle);
+
+        var vertices = new PdfArray(document);
+        foreach (var point in geometry.Tail)
+        {
+            vertices.Elements.Add(new PdfReal(point.X));
+            vertices.Elements.Add(new PdfReal(point.Y));
+        }
+        annotation.Elements.SetObject("/Vertices", vertices);
+        annotation.Elements.SetObject("/AP", CreateCalloutAppearance(document, model, geometry));
+        return annotation;
+    }
+
+    private static PdfDictionary CreateCalloutAppearance(
+        PdfDocument document,
+        FreeTextAnnotationModel model,
+        (XPoint ConnectorStart, XPoint Anchor, IReadOnlyList<XPoint> Tail, PdfRectangle Rectangle) geometry)
+    {
+        var rectangle = geometry.Rectangle;
+        var form = new XForm(document, new XRect(0, 0, rectangle.Width, rectangle.Height));
+        using (var graphics = XGraphics.FromForm(form))
+            DrawCalloutLines(graphics, model, geometry, rectangle.X1, rectangle.Y2);
+
+        var pdfForm = GetPdfForm(form)
+            ?? throw new InvalidOperationException("PDFsharp did not create the callout appearance form.");
+        var appearance = new PdfDictionary(document);
+        appearance.Elements.SetReference("/N", pdfForm);
+        return appearance;
+    }
+
+    private static (XPoint ConnectorStart, XPoint Anchor, IReadOnlyList<XPoint> Tail, PdfRectangle Rectangle)
+        GetCalloutGeometry(FreeTextAnnotationModel model)
+    {
+        var geometry = model.GetCalloutGeometry();
+        var start = new XPoint(geometry.Start.X, geometry.Start.Y);
+        var anchor = new XPoint(geometry.Anchor.X, geometry.Anchor.Y);
+        var tail = geometry.Tail.Select(static p => new XPoint(p.X, p.Y)).ToArray();
+        var points = tail.Concat([start, anchor]).ToArray();
+        return (start, anchor, tail, new PdfRectangle(
+            new XPoint(points.Min(p => p.X) - 1, points.Min(p => p.Y) - 1),
+            new XPoint(points.Max(p => p.X) + 1, points.Max(p => p.Y) + 1)));
+    }
+
+    private static void DrawCalloutLines(
+        XGraphics graphics,
+        FreeTextAnnotationModel model,
+        (XPoint ConnectorStart, XPoint Anchor, IReadOnlyList<XPoint> Tail, PdfRectangle Rectangle) geometry,
+        double originX,
+        double originY)
+    {
+        if (!model.CalloutEnabled)
+            return;
+
+        static XPoint ToDrawingPoint(XPoint point, double xOrigin, double yOrigin) =>
+            new(point.X - xOrigin, yOrigin - point.Y);
+
+        var pen = new XPen(XColors.Red, 1);
+        graphics.DrawLine(pen, ToDrawingPoint(geometry.ConnectorStart, originX, originY),
+            ToDrawingPoint(geometry.Anchor, originX, originY));
+        for (var index = 1; index < geometry.Tail.Count; index++)
+            graphics.DrawLine(pen, ToDrawingPoint(geometry.Tail[index - 1], originX, originY),
+                ToDrawingPoint(geometry.Tail[index], originX, originY));
     }
 
     private static string CreateDefaultStyle(FreeTextAnnotationModel model)

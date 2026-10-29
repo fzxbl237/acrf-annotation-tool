@@ -25,13 +25,24 @@ internal sealed class MenuSurfacePopup : Popup
     public void Configure(MenuSurfaceVariant variant, MenuSide side, MenuAlignment alignment, double gap, Point? point)
     {
         IsMotionEnabled = ArcMotion.IsFull(PlacementTarget ?? (AvaloniaObject)this);
-        Placement = point is null ? PlacementMode.BottomEdgeAlignedLeft : PlacementMode.AnchorAndGravity;
-        PlacementRect = point is { } p ? new Rect(p, new Size(1, 1)) : null;
+        // A submenu opens beside the row that owns it: flush to the row's right edge with the tops aligned (the positioner
+        // flips it to the left when there is no room). Everything else grows down-right from the given point.
+        if (side == MenuSide.Right)
+        {
+            Placement = PlacementMode.RightEdgeAlignedTop;
+            PlacementRect = null;
+        }
+        else
+        {
+            Placement = point is null ? PlacementMode.BottomEdgeAlignedLeft : PlacementMode.AnchorAndGravity;
+            PlacementRect = point is { } p ? new Rect(p, new Size(1, 1)) : null;
+        }
         PlacementAnchor = Avalonia.Controls.Primitives.PopupPositioning.PopupAnchor.BottomLeft;
         PlacementGravity = Avalonia.Controls.Primitives.PopupPositioning.PopupGravity.BottomRight;
         PlacementConstraintAdjustment = Avalonia.Controls.Primitives.PopupPositioning.PopupPositionerConstraintAdjustment.All;
-        VerticalOffset = point is null ? gap : 0;
-        HorizontalOffset = 0;
+        VerticalOffset = point is null && side != MenuSide.Right ? gap : 0;
+        // The row's right edge sits inside the panel padding, so the same gap clears the parent's border.
+        HorizontalOffset = side == MenuSide.Right ? gap : 0;
     }
 
     public void Reposition()

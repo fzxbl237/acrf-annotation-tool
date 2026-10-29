@@ -1,4 +1,5 @@
-﻿using Avalonia;
+using AcrfAnnotationTool.Controls.Menus;
+using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Media;
@@ -22,11 +23,13 @@ public partial class FreeTextAnnotationControl : UserControl
     public event EventHandler? DeleteRequested;
     private double _displayScale = 96.0 / 72.0;
     private bool _endingEdit;
+    internal double DisplayScale => _displayScale;
+    internal double PageHeightPoints { get; private set; }
     public FreeTextAnnotationControl()
     {
         InitializeComponent(); ClipToBounds = false;
         Editor.IsReadOnly = !IsAnnotationEditingEnabled;
-        if (ContextMenu is { } contextMenu) contextMenu.IsEnabled = IsAnnotationEditingEnabled;
+        AnnotationMenu.IsEnabled = IsAnnotationEditingEnabled;
         Editor.TextChanged += (_, _) => UpdatePlaceholder();
         Editor.GotFocus += (_, _) => { DragOverlay.IsVisible = false; Placeholder.IsVisible = false; if (IsPlaceholderContent(Editor.Text)) Editor.Text = string.Empty; };
         Editor.LostFocus += (_, _) => EndEdit();
@@ -48,7 +51,9 @@ public partial class FreeTextAnnotationControl : UserControl
             {
                 if (!IsAnnotationEditingEnabled && Editor.IsFocused) EndEdit();
                 Editor.IsReadOnly = !IsAnnotationEditingEnabled;
-                if (ContextMenu is { } contextMenu) contextMenu.IsEnabled = IsAnnotationEditingEnabled;
+                AnnotationMenu.IsEnabled = IsAnnotationEditingEnabled;
+                if (!IsAnnotationEditingEnabled) AnnotationMenu.Close(false);
+                ApplyModelToUi();
                 AnnotationAdornerService.UpdateAdornerState(this);
             }
         };
@@ -63,6 +68,7 @@ public partial class FreeTextAnnotationControl : UserControl
     {
         if (Model == null) return;
         _displayScale = displayScale > 0 ? displayScale : 96.0 / 72.0;
+        PageHeightPoints = pageHeightPoints;
         var w = PdfCoordinateConverter.PointsToPixels(Model.Width, displayScale);
         var h = PdfCoordinateConverter.PointsToPixels(Model.Height, displayScale);
         var wpfPos = PdfCoordinateConverter.PdfToAvalonia(Model.PdfX, Model.PdfY, Model.Height, pageHeightPoints, displayScale);
@@ -87,6 +93,7 @@ public partial class FreeTextAnnotationControl : UserControl
             verticalPadding + baselineCompensation);
         Editor.FontSize = Math.Max(1, Model.FontSize * displayScale); Placeholder.FontSize = Editor.FontSize;
         ApplyTextAlignmentFromModel(); ApplyModelToUi(); UpdateChrome();
+        if (Parent is PageAnnotationCanvas page) page.RefreshCallout(this);
     }
     public void BeginEdit()
     {
@@ -194,7 +201,7 @@ public partial class FreeTextAnnotationControl : UserControl
     private void UpdatePlaceholder() { var show = !Editor.IsFocused && (string.IsNullOrEmpty(Editor.Text) || IsPlaceholderContent(Editor.Text)); Placeholder.IsVisible = show; if (show) Placeholder.FontSize = Editor.FontSize; }
     private void UpdateDragOverlay() => DragOverlay.IsVisible = !Editor.IsFocused;
     public void SyncToModel() { if (Model != null) Model.Text = IsPlaceholderContent(Editor.Text) ? DefaultPlaceholderText : Editor.Text; }
-    private void ContextMenu_OnOpened(object? s, EventArgs e) { if (Model != null) IsSelected = true; BorderSolidMenuItem.IsChecked = Model?.BorderStyle != AnnotationBorderStyle.Dashed; BorderDashedMenuItem.IsChecked = Model?.BorderStyle == AnnotationBorderStyle.Dashed; if (Model != null) { AlignHLeftMenuItem.IsChecked = Model.HorizontalTextAlignment == AnnotationHorizontalTextAlignment.Left; AlignHCenterMenuItem.IsChecked = Model.HorizontalTextAlignment == AnnotationHorizontalTextAlignment.Center; AlignHRightMenuItem.IsChecked = Model.HorizontalTextAlignment == AnnotationHorizontalTextAlignment.Right; AlignVTopMenuItem.IsChecked = Model.VerticalTextAlignment == AnnotationVerticalTextAlignment.Top; AlignVCenterMenuItem.IsChecked = Model.VerticalTextAlignment == AnnotationVerticalTextAlignment.Center; AlignVBottomMenuItem.IsChecked = Model.VerticalTextAlignment == AnnotationVerticalTextAlignment.Bottom; } }
+    private void ContextMenu_OnOpened(object? s, Avalonia.Interactivity.RoutedEventArgs e) { if (Model != null) IsSelected = true; BorderSolidMenuItem.IsChecked = Model?.BorderStyle != AnnotationBorderStyle.Dashed; BorderDashedMenuItem.IsChecked = Model?.BorderStyle == AnnotationBorderStyle.Dashed; if (Model != null) { AlignHLeftMenuItem.IsChecked = Model.HorizontalTextAlignment == AnnotationHorizontalTextAlignment.Left; AlignHCenterMenuItem.IsChecked = Model.HorizontalTextAlignment == AnnotationHorizontalTextAlignment.Center; AlignHRightMenuItem.IsChecked = Model.HorizontalTextAlignment == AnnotationHorizontalTextAlignment.Right; AlignVTopMenuItem.IsChecked = Model.VerticalTextAlignment == AnnotationVerticalTextAlignment.Top; AlignVCenterMenuItem.IsChecked = Model.VerticalTextAlignment == AnnotationVerticalTextAlignment.Center; AlignVBottomMenuItem.IsChecked = Model.VerticalTextAlignment == AnnotationVerticalTextAlignment.Bottom; } }
     private void HAlign(AnnotationHorizontalTextAlignment v) { if (!IsAnnotationEditingEnabled || Model == null) return; Model.HorizontalTextAlignment = v; ApplyTextAlignmentFromModel(); CommitEdit?.Invoke(this, EventArgs.Empty); }
     private void VAlign(AnnotationVerticalTextAlignment v) { if (!IsAnnotationEditingEnabled || Model == null) return; Model.VerticalTextAlignment = v; ApplyTextAlignmentFromModel(); CommitEdit?.Invoke(this, EventArgs.Empty); }
     private void AlignHLeftMenuItem_OnClick(object? s, Avalonia.Interactivity.RoutedEventArgs e) => HAlign(AnnotationHorizontalTextAlignment.Left);
@@ -211,7 +218,7 @@ public partial class FreeTextAnnotationControl : UserControl
     private void BgRedMenuItem_OnClick(object? s, Avalonia.Interactivity.RoutedEventArgs e) => SetBg("#FFEF9A9A");
     private void BgBlueMenuItem_OnClick(object? s, Avalonia.Interactivity.RoutedEventArgs e) => SetBg("#FF90CAF9");
     private void BgWhiteMenuItem_OnClick(object? s, Avalonia.Interactivity.RoutedEventArgs e) => SetBg("#FFFFFFFF");
-    private void FontSizeMenuItem_OnClick(object? s, Avalonia.Interactivity.RoutedEventArgs e) { if (IsAnnotationEditingEnabled && Model != null && s is MenuItem mi && mi.Tag is string t && double.TryParse(t, out var fs)) { Model.FontSize = fs; ApplyModelToUi(); CommitEdit?.Invoke(this, EventArgs.Empty); } }
+    private void FontSizeMenuItem_OnClick(object? s, Avalonia.Interactivity.RoutedEventArgs e) { if (IsAnnotationEditingEnabled && Model != null && s is MenuEntry mi && mi.CommandParameter is string t && double.TryParse(t, out var fs)) { Model.FontSize = fs; ApplyModelToUi(); CommitEdit?.Invoke(this, EventArgs.Empty); } }
     private void BoldMenuItem_OnClick(object? s, Avalonia.Interactivity.RoutedEventArgs e)
     {
         if (!IsAnnotationEditingEnabled || Model == null ||
@@ -223,6 +230,42 @@ public partial class FreeTextAnnotationControl : UserControl
         BoldMenuItem.IsChecked = true;
         ApplyModelToUi();
         CommitEdit?.Invoke(this, EventArgs.Empty);
+    }
+    private void SetCallout(bool isLeft)
+    {
+        if (!IsAnnotationEditingEnabled || Model == null || Parent is not Canvas canvas) return;
+        if (!Model.CalloutEnabled)
+        {
+            var pageWidth = canvas.Bounds.Width / _displayScale;
+            Model.CalloutArmLength = 8;
+            Model.CalloutX = Math.Clamp(isLeft ? Model.PdfX - 40 : Model.PdfX + Model.Width + 40,
+                8, Math.Max(8, pageWidth - 8));
+            var centerY = Model.PdfY + Model.Height / 2;
+            Model.CalloutY1 = Math.Clamp(centerY + 36, 0, PageHeightPoints);
+            Model.CalloutY2 = Math.Clamp(centerY - 36, 0, PageHeightPoints);
+        }
+        Model.CalloutEnabled = true;
+        Model.CalloutIsLeft = isLeft;
+        Model.CalloutShape = isLeft ? "LeftBracket" : "RightBracket";
+        NotifyResizeCommitted();
+        if (Parent is PageAnnotationCanvas page) page.RefreshCallout(this);
+    }
+    private void CalloutLeftMenuItem_OnClick(object? s, Avalonia.Interactivity.RoutedEventArgs e) => SetCallout(true);
+    private void CalloutRightMenuItem_OnClick(object? s, Avalonia.Interactivity.RoutedEventArgs e) => SetCallout(false);
+    private void CalloutShapeMenuItem_OnClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+    {
+        if (!IsAnnotationEditingEnabled || Model == null || sender is not MenuEntry { CommandParameter: string shape }) return;
+        if (!Model.CalloutEnabled) SetCallout(true);
+        Model.CalloutShape = shape;
+        NotifyResizeCommitted();
+        if (Parent is PageAnnotationCanvas page) page.RefreshCallout(this);
+    }
+    private void CalloutRemoveMenuItem_OnClick(object? s, Avalonia.Interactivity.RoutedEventArgs e)
+    {
+        if (!IsAnnotationEditingEnabled || Model == null) return;
+        Model.CalloutEnabled = false;
+        NotifyResizeCommitted();
+        if (Parent is PageAnnotationCanvas page) page.RefreshCallout(this);
     }
     private void DeleteMenuItem_OnClick(object? s, Avalonia.Interactivity.RoutedEventArgs e) { if (IsAnnotationEditingEnabled) DeleteRequested?.Invoke(this, EventArgs.Empty); }
 }

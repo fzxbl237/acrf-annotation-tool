@@ -678,7 +678,14 @@ public partial class PdfViewer : UserControl, IDisposable
         return low;
     }
 
-    private void RebuildAnnotationsForPage(int pi, double php, double scale, Canvas layer) { layer.Children.Clear(); foreach (var m in _annotations.Where(a => a.PageIndex == pi)) AddAnnotationControl(m, php, scale, layer); }
+    private void RebuildAnnotationsForPage(int pi, double php, double scale, Canvas layer)
+    {
+        if (layer is PageAnnotationCanvas page)
+            foreach (var control in layer.Children.OfType<FreeTextAnnotationControl>().ToList())
+                page.UnhookAnnotation(control);
+        layer.Children.Clear();
+        foreach (var m in _annotations.Where(a => a.PageIndex == pi)) AddAnnotationControl(m, php, scale, layer);
+    }
     private void AddAnnotationControl(FreeTextAnnotationModel m, double php, double scale, Canvas layer)
     {
         var c = new FreeTextAnnotationControl
@@ -716,7 +723,7 @@ public partial class PdfViewer : UserControl, IDisposable
         c.ApplyLayoutFromPdf(php, scale);
     }
 
-    private void SyncAllAnnotationModelsFromUi() { foreach (var s in _pageSlots) if (s.AnnotationLayer is { } layer) foreach (var c in layer.Children.OfType<FreeTextAnnotationControl>()) CommitAnnotationFromControl(c); }
+    private void SyncAllAnnotationModelsFromUi() { foreach (var s in _pageSlots) if (s.AnnotationLayer is { } layer) foreach (var c in layer.Children.OfType<FreeTextAnnotationControl>().ToList()) CommitAnnotationFromControl(c); }
     private void RemoveAnnotation(string id) { _annotations.RemoveAll(a => a.Id == id); if (_annotationControls.Remove(id, out var c)) { var l = _pageSlots.Select(s => s.AnnotationLayer).OfType<PageAnnotationCanvas>().FirstOrDefault(x => x.Children.Contains(c)); l?.UnhookAnnotation(c); l?.Children.Remove(c); } if (_selectedAnnotation?.Model?.Id == id) _selectedAnnotation = null; }
     private void OnAnnotationIsSelectedChanged(FreeTextAnnotationControl c)
     {
