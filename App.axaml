@@ -3,6 +3,7 @@
     xmlns="https://github.com/avaloniaui"
     xmlns:local="using:AcrfAnnotationTool"
     xmlns:atom="https://atomui.net"
+    xmlns:menus="using:AcrfAnnotationTool.Controls.Menus"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
     <Application.DataTemplates>
         <local:ViewLocator />
@@ -12,6 +13,8 @@
         <ResourceDictionary>
             <ResourceDictionary.MergedDictionaries>
                 <ResourceInclude Source="avares://AcrfAnnotationTool/Controls/ButtonGroupThemes.axaml" />
+                <ResourceInclude Source="avares://AcrfAnnotationTool/Controls/ScrubInput/ScrubInputTheme.axaml" />
+                <ResourceInclude Source="avares://AcrfAnnotationTool/Controls/Popover/PopoverTheme.axaml" />
                 <ResourceDictionary>
                     <ResourceDictionary.ThemeDictionaries>
                         <ResourceDictionary x:Key="Default">
@@ -30,6 +33,9 @@
 
     <Application.Styles>
         <FluentTheme />
+        <Style Selector="TextBox">
+            <Setter Property="menus:ContextMenu.UseTextEditingMenu" Value="True" />
+        </Style>
         <Style Selector="atom|AutoComplete">
             <atom:AutoCompletePopupRootStyle x:SetterTargetType="Border">
                 <Setter Property="MinWidth" Value="500" />

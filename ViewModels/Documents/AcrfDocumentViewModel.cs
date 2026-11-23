@@ -1,4 +1,6 @@
-﻿using Avalonia.Controls;
+using Avalonia.Controls;
+using Avalonia.Media;
+using Avalonia.Media.TextFormatting;
 using Avalonia.Platform.Storage;
 using Avalonia.Threading;
 using System.Collections.ObjectModel;
@@ -8,6 +10,7 @@ using CommunityToolkit.Mvvm.Input;
 using DynamicData;
 using AcrfAnnotationTool.Models;
 using AcrfAnnotationTool.Services;
+using AcrfAnnotationTool.Services.Crf;
 using AcrfAnnotationTool.Services.Interface;
 using AcrfAnnotationTool.ViewModels;
 using PdfViewerControl.Controls;
@@ -33,8 +36,6 @@ public partial class AcrfDocumentViewModel : ObservableObject
         "#FFFFBE9B"
     ];
 
-    private static readonly Lazy<TrueTypeFontMetrics> AnnotationMeasurementFont =
-        new(() => CreateMeasurementFont("ARIAL.TTF"));
     private static readonly Lazy<TrueTypeFontMetrics> DomainAnnotationMeasurementFont =
         new(() => CreateMeasurementFont("ARIALBD.TTF"));
     private static readonly Lazy<TrueTypeFontMetrics> ChineseAnnotationMeasurementFont =
@@ -251,6 +252,81 @@ public partial class AcrfDocumentViewModel : ObservableObject
         return false;
     }
 
+    public async Task<bool> ExtractCrfWithResultAsync(
+        CrfDatabaseType databaseType,
+        CancellationToken cancellationToken = default)
+    {
+        if (_window is null) return false;
+        var pdfPath = PdfPath;
+        if (string.IsNullOrWhiteSpace(pdfPath) || !File.Exists(pdfPath))
+        {
+            Status = "请先导入 aCRF PDF";
+            _messageService.Error(Status);
+            return false;
+        }
+
+        try
+        {
+            Status = "正在抽取 CRF...";
+            var extracted = await Task.Run(
+                () => CrfExtractionService.Extract(pdfPath, databaseType, cancellationToken),
+                cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
+
+            if (extracted.Count == 0)
+            {
+                Status = "未从当前 PDF 抽取到内容";
+                _messageService.Warning(Status);
+                return false;
+            }
+
+            var rows = extracted.Select(CreateAnnotationFromExtraction).ToArray();
+            _annotationGrid?.CancelEdit();
+            _annotationGrid?.ClearHistory();
+            UnobserveAllAnnotations();
+            _source.Edit(updater =>
+            {
+                updater.Clear();
+                updater.AddRange(rows);
+            });
+            foreach (var row in rows)
+                ObserveAnnotation(row);
+
+            _hasImportedSpec = true;
+            SelectedItem = rows[0];
+            SyncRowsToPdf(rows);
+            Status = $"CRF 抽取完成：{rows.Length} 条";
+            _messageService.Success(Status);
+            return true;
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            Status = "CRF 抽取已取消";
+        }
+        catch (Exception exception)
+        {
+            Status = $"CRF 抽取失败：{exception.Message}";
+            _messageService.Error(Status);
+        }
+        return false;
+    }
+
+    private static Annotation CreateAnnotationFromExtraction(CrfExtractedAnnotation extracted)
+    {
+        return new Annotation
+        {
+            FormName = extracted.FormName,
+            PageNum = extracted.PageNum,
+            Text = extracted.Text ?? string.Empty,
+            Type = extracted.Type ?? string.Empty,
+            X = extracted.X,
+            Y = extracted.Y,
+            Width = 0,
+            Line = 1,
+            AnnotationUniqueId = Guid.NewGuid().ToString()
+        };
+    }
+
     [RelayCommand(IncludeCancelCommand = true)]
     private async Task ExportAsync(CancellationToken cancellationToken)
     {
@@ -307,9 +383,10 @@ public partial class AcrfDocumentViewModel : ObservableObject
         if (string.IsNullOrWhiteSpace(path))
             return false;
 
-        if (!_viewer.SaveAnnotations(path, out var error))
+        var result = await _viewer.SaveAnnotationsAsync(path);
+        if (!result.Success)
         {
-            Status = error ?? "PDF 另存失败";
+            Status = result.Error ?? "PDF 另存失败";
             _messageService.Error(Status);
             return false;
         }
@@ -331,9 +408,10 @@ public partial class AcrfDocumentViewModel : ObservableObject
         if (string.IsNullOrWhiteSpace(path))
             return false;
 
-        if (!_viewer.SaveAnnotationsFlattened(path, out var error))
+        var result = await _viewer.SaveAnnotationsAsync(path, flatten: true);
+        if (!result.Success)
         {
-            Status = error ?? "PDF Flatten 另存失败";
+            Status = result.Error ?? "PDF Flatten 另存失败";
             _messageService.Error(Status);
             return false;
         }
@@ -501,21 +579,39 @@ public partial class AcrfDocumentViewModel : ObservableObject
         return new TrueTypeFontMetrics(fontPath);
     }
 
-    private TrueTypeFontMetrics GetAnnotationMeasurementFont() =>
-        Language ? ChineseAnnotationMeasurementFont.Value : AnnotationMeasurementFont.Value;
-
     private TrueTypeFontMetrics GetDomainAnnotationMeasurementFont() =>
         Language ? ChineseAnnotationMeasurementFont.Value : DomainAnnotationMeasurementFont.Value;
 
     private double GetAnnotationTextWidth(string text)
     {
-        var font = GetAnnotationMeasurementFont();
-        var maxLineWidth = text
+        var family = Language
+            ? AcrfProjectFontCollection.AnnotationFontFamily
+            : new FontFamily("Arial,SimSun,Arial");
+        var typeface = new Typeface(family, FontStyle.Normal, FontWeight.Normal, FontStretch.Normal);
+        var maxLineWidthDip = text
             .Split(["\r\n", "\r", "\n"], StringSplitOptions.None)
-            .Select(line => font.GetWidth(line, AnnotationFontSize))
+            .Select(line => new TextLayout(
+                line,
+                typeface,
+                AnnotationFontSize * 96d / 72d,
+                null,
+                TextAlignment.Left,
+                TextWrapping.NoWrap,
+                TextTrimming.None,
+                null,
+                FlowDirection.LeftToRight,
+                double.PositiveInfinity,
+                double.PositiveInfinity,
+                double.NaN,
+                0,
+                1,
+                null,
+                null,
+                null).WidthIncludingTrailingWhitespace)
             .DefaultIfEmpty(0)
             .Max();
-        return Math.Max(1, maxLineWidth + AnnotationHorizontalPadding);
+        var maxLineWidthPoints = maxLineWidthDip * 72d / 96d;
+        return Math.Max(1, maxLineWidthPoints + AnnotationHorizontalPadding);
     }
 
     private double GetAnnotationWidth(string? text, double currentWidth)
@@ -1063,7 +1159,7 @@ public partial class AcrfDocumentViewModel : ObservableObject
                     row.CalloutX = Math.Max(8, row.X - 40);
                     row.CalloutY1 = row.Y + GetAnnotationHeight(row.Line) / 2 + 36;
                     row.CalloutY2 = Math.Max(0, row.CalloutY1 - 72);
-                    if (string.IsNullOrWhiteSpace(row.CalloutShape)) row.CalloutShape = row.CalloutIsLeft ? "LeftBracket" : "RightBracket";
+                    if (string.IsNullOrWhiteSpace(row.CalloutShape)) row.CalloutShape = "OpenArrow";
                 }
                 _viewer.UpdateAnnotation(row.AnnotationUniqueId, model => CopyCalloutToModel(row, model));
                 return;

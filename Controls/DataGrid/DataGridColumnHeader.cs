@@ -8,10 +8,11 @@ using Avalonia.Data;
 using Avalonia.Input;
 using Avalonia.Media;
 using Avalonia.Styling;
+using AtomUI.Icons.AntDesign;
 using AtomButton = AtomUI.Desktop.Controls.Button;
 using AtomCheckBox = AtomUI.Desktop.Controls.CheckBox;
-using AtomContextMenu = AtomUI.Desktop.Controls.ContextMenu;
-using AtomMenuItem = AtomUI.Desktop.Controls.MenuItem;
+using AcrfAnnotationTool.Controls.Menus;
+
 using AtomFlyout = AtomUI.Desktop.Controls.Flyout;
 
 namespace PatChes.Controls.DataGrid;
@@ -33,6 +34,7 @@ public class DataGridColumnHeader : Control
     private AtomFlyout? _filterFlyout;
     private AtomFlyout? _columnChooserFlyout;
     private DataGridFilterPopup? _filterContent;
+    private static MenuSurface? _activeContextMenu;
     private bool _isResizing;
     private double _resizeStartX;
     private double _resizeStartWidth;
@@ -217,7 +219,7 @@ public class DataGridColumnHeader : Control
 
         if (pt.Properties.IsRightButtonPressed)
         {
-            ShowClearFilterContextMenu();
+            ShowClearFilterContextMenu(e);
             e.Handled = true;
             return;
         }
@@ -278,33 +280,47 @@ public class DataGridColumnHeader : Control
         }
     }
 
-    private void ShowClearFilterContextMenu()
+    private void ShowClearFilterContextMenu(PointerPressedEventArgs e)
     {
         if (OwningColumn?.DataGridOwner == null) return;
         var grid = OwningColumn.DataGridOwner;
         bool hasFilter = grid.Columns.Any(c => c.IsFiltered);
 
-        var menu = new AtomContextMenu();
+        _activeContextMenu?.Close(returnFocus: false);
+        var menu = new MenuSurface
+        {
+            Variant = MenuSurfaceVariant.Context,
+            ClosesOnViewportChange = true,
+            ClosesOnAnchorPress = true,
+            FocusReturnTarget = grid.HeadersPresenter as Control ?? this
+        };
 
         var target = grid.HeadersPresenter as Control ?? this;
-        var chooserItem = new AtomMenuItem { Header = "列选择 (Column Chooser)" };
+        var chooserItem = new MenuEntry
+        {
+            Header = "列选择 (Column Chooser)",
+            Icon = new TableOutlined { Width = 16, Height = 16 }
+        };
         chooserItem.Click += (_, _) => ShowColumnChooserFlyout(grid, target);
         menu.Items.Add(chooserItem);
 
-        var clearAllItem = new AtomMenuItem
+        var clearAllItem = new MenuEntry
         {
             Header = "取消所有筛选",
+            Icon = new ClearOutlined { Width = 16, Height = 16 },
             IsEnabled = hasFilter,
         };
         clearAllItem.Click += (_, _) => grid.ClearAllFilters();
         menu.Items.Add(clearAllItem);
 
-        // Anchor to the stable headers presenter (not this header) so the menu stays open
-        // while BuildHeaders() rebuilds header instances when a column is toggled.
-        // Pass the target explicitly: the parameterless Open() does not resolve PlacementTarget
-        // for a menu created in code, and would throw ArgumentNullException.
-        menu.PlacementTarget = target;
-        menu.Open(target);
+        _activeContextMenu = menu;
+        menu.Closed += (_, _) =>
+        {
+            if (ReferenceEquals(_activeContextMenu, menu)) _activeContextMenu = null;
+        };
+
+        // Anchor to the stable headers presenter so column visibility changes do not detach the menu.
+        menu.OpenAt(target, e.GetPosition(target));
     }
 
     private void ShowColumnChooserFlyout(DataGrid grid, Control target)

@@ -39,6 +39,12 @@
                         MinWidth="60"
                         Width="80" />
                     <dg:DataGridTextColumn
+                        Binding="{Binding Type}"
+                        Header="类型"
+                        IsReadOnly="True"
+                        MinWidth="80"
+                        Width="80" />
+                    <dg:DataGridTextColumn
                         Binding="{Binding VarName}"
                         Header="变量名称"
                         MinWidth="120"
@@ -77,23 +83,27 @@
                         Binding="{Binding AnnotationDotted}"
                         Header="虚线框"
                         Width="90" />
-                    <dg:DataGridNumericUpDownColumn
+                    <dg:DataGridScrubInputColumn
                         Binding="{Binding X}"
                         Header="X"
+                        Step="10"
                         Width="80" />
-                    <dg:DataGridNumericUpDownColumn
+                    <dg:DataGridScrubInputColumn
                         Binding="{Binding Y}"
                         Header="Y"
+                        Step="10"
                         Width="80" />
-                    <dg:DataGridNumericUpDownColumn
+                    <dg:DataGridScrubInputColumn
                         Binding="{Binding Width}"
                         Header="宽度"
                         Minimum="0"
+                        Step="10"
                         Width="80" />
-                    <dg:DataGridNumericUpDownColumn
+                    <dg:DataGridScrubInputColumn
                         Binding="{Binding Line}"
                         Header="行数"
                         Minimum="1"
+                        Step="1"
                         Width="80" />
                     <dg:DataGridCheckBoxColumn
                         Binding="{Binding CalloutEnabled}"

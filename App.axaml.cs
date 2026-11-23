@@ -1,6 +1,7 @@
 ﻿using Avalonia;
 using Avalonia.Controls.ApplicationLifetimes;
 using Avalonia.Markup.Xaml;
+using Avalonia.Media;
 using AcrfAnnotationTool.Services;
 using AcrfAnnotationTool.Services.Interface;
 using AcrfAnnotationTool.ViewModels;
@@ -23,6 +24,8 @@ public partial class App : Application
     {
         if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
         {
+            FontManager.Current.AddFontCollection(new AcrfProjectFontCollection());
+
             var services = new ServiceCollection();
             services.AddSingleton<Func<SqliteConnection>>(_ => () =>
             {

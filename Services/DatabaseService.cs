@@ -7,6 +7,20 @@ namespace AcrfAnnotationTool.Services;
 
 public sealed partial class DatabaseService(Func<SqliteConnection> createConnection) : IDatabaseService
 {
+    // Prefix suggestions are served by this index (Content is also the ORDER BY key, so LIMIT can stop
+    // early). SQLite refuses to use an index for LIKE when the statement carries ESCAPE, so the common
+    // query has no ESCAPE clause; see QuerySuggestions. Without the index each keystroke scans ~271k
+    // rows and sorts them in a temporary B-tree.
+    private const string SuggestionIndexSql =
+        "CREATE INDEX IF NOT EXISTS idx_suggestion_content_nocase ON suggestion (Content COLLATE NOCASE)";
+
+    // Built at most once per process, on the first suggestion query (a background thread), so a shipped
+    // database without the index is upgraded in place. A read-only install directory only loses the
+    // optimization; queries keep working.
+    private readonly Lazy<bool> _suggestionIndexReady = new(
+        () => EnsureSuggestionIndex(createConnection),
+        LazyThreadSafetyMode.ExecutionAndPublication);
+
     [GeneratedRegex("^(?<prefix>[A-Za-z0-9]+)TESTCD\\s*=\\s*(?<value>.+)$", RegexOptions.CultureInvariant)]
     private static partial Regex TestCodeSuggestionRegex();
 
@@ -71,42 +85,72 @@ public sealed partial class DatabaseService(Func<SqliteConnection> createConnect
 
     public IReadOnlyList<Suggestion> QuerySuggestions(string? searchText)
     {
+        _ = _suggestionIndexReady.Value;
+
         using var connection = createConnection();
         connection.Open();
 
         var keyword = searchText?.Trim();
         using var command = connection.CreateCommand();
+        var suggestions = new List<Suggestion>(50);
         if (string.IsNullOrWhiteSpace(keyword))
         {
             command.CommandText =
-                "SELECT Id, Content, Description FROM suggestion ORDER BY Content LIMIT 50";
-        }
-        else
-        {
-            var escapedKeyword = EscapeLikePattern(keyword);
-            command.CommandText =
-                "SELECT Id, Content, Description FROM suggestion " +
-                "WHERE Content LIKE $prefix ESCAPE $escape ORDER BY Content LIMIT 50";
-            command.Parameters.AddWithValue("$prefix", $"{escapedKeyword}%");
-            command.Parameters.AddWithValue("$escape", "\\");
+                "SELECT Id, Content, Description FROM suggestion ORDER BY Content COLLATE NOCASE LIMIT 50";
+            ReadSuggestions(command, suggestions);
+            return suggestions;
         }
 
-        var suggestions = new List<Suggestion>(50);
+        // The index is NOCASE; ordering by the column's default BINARY collation would force SQLite to
+        // collect and sort every match in a temporary B-tree (28ms even for the empty keyword). Ordering
+        // with the same collation as the index lets the LIMIT stop after 50 index entries.
+        var needsWildcardEscaping = keyword.IndexOfAny(['%', '_']) >= 0;
+        command.CommandText =
+            "SELECT Id, Content, Description FROM suggestion " +
+            (needsWildcardEscaping
+                ? "WHERE Content LIKE $prefix ESCAPE $escape ORDER BY Content COLLATE NOCASE LIMIT 50"
+                : "WHERE Content LIKE $prefix ORDER BY Content COLLATE NOCASE LIMIT 50");
+        command.Parameters.AddWithValue("$prefix",
+            needsWildcardEscaping ? $"{EscapeLikePattern(keyword)}%" : $"{keyword}%");
+        if (needsWildcardEscaping)
+            command.Parameters.AddWithValue("$escape", "\\");
         ReadSuggestions(command, suggestions);
-        if (!string.IsNullOrWhiteSpace(keyword) && suggestions.Count < 50)
-        {
-            command.CommandText =
-                "SELECT Id, Content, Description FROM suggestion " +
-                "WHERE Content NOT LIKE $prefix ESCAPE $escape AND " +
-                "(Content LIKE $contains ESCAPE $escape " +
-                "OR (Description IS NOT NULL AND Description LIKE $contains ESCAPE $escape)) " +
-                "ORDER BY Content LIMIT $remaining";
-            command.Parameters.AddWithValue("$contains", $"%{EscapeLikePattern(keyword)}%");
-            command.Parameters.AddWithValue("$remaining", 50 - suggestions.Count);
-            ReadSuggestions(command, suggestions);
-        }
+        if (suggestions.Count >= 50)
+            return suggestions;
+
+        var escapedKeyword = EscapeLikePattern(keyword);
+        command.Parameters.Clear();
+        command.CommandText =
+            "SELECT Id, Content, Description FROM suggestion " +
+            "WHERE Content NOT LIKE $prefixEscaped ESCAPE $escape AND " +
+            "(Content LIKE $contains ESCAPE $escape " +
+            "OR (Description IS NOT NULL AND Description LIKE $contains ESCAPE $escape)) " +
+            "ORDER BY Content COLLATE NOCASE LIMIT $remaining";
+        command.Parameters.AddWithValue("$prefixEscaped", $"{escapedKeyword}%");
+        command.Parameters.AddWithValue("$escape", "\\");
+        command.Parameters.AddWithValue("$contains", $"%{escapedKeyword}%");
+        command.Parameters.AddWithValue("$remaining", 50 - suggestions.Count);
+        ReadSuggestions(command, suggestions);
 
         return suggestions;
+    }
+
+    /// <summary>Adds the suggestion prefix index to an existing database; safe to call repeatedly.</summary>
+    private static bool EnsureSuggestionIndex(Func<SqliteConnection> createConnection)
+    {
+        try
+        {
+            using var connection = createConnection();
+            connection.Open();
+            using var command = connection.CreateCommand();
+            command.CommandText = SuggestionIndexSql;
+            command.ExecuteNonQuery();
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
     }
 
     private static void ReadSuggestions(SqliteCommand command, List<Suggestion> suggestions)
@@ -195,6 +239,13 @@ public sealed partial class DatabaseService(Func<SqliteConnection> createConnect
         {
             transaction.Rollback();
             throw;
+        }
+
+        // Rebuilt databases must keep the prefix index; building it after the bulk insert is cheaper.
+        using (var indexCommand = connection.CreateCommand())
+        {
+            indexCommand.CommandText = SuggestionIndexSql;
+            indexCommand.ExecuteNonQuery();
         }
     }
 

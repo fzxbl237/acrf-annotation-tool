@@ -5,6 +5,7 @@ using Avalonia.Interactivity;
 using Avalonia.VisualTree;
 using AcrfAnnotationTool.ViewModels.Documents;
 using AcrfAnnotationTool.Services;
+using AcrfAnnotationTool.Services.Crf;
 using AtomDialog = AtomUI.Desktop.Controls.Dialog;
 using AtomDialogButtonClickedEventArgs = AtomUI.Desktop.Controls.DialogButtonClickedEventArgs;
 using AtomDialogButtonRole = AtomUI.Desktop.Controls.DialogButtonRole;
@@ -13,7 +14,17 @@ namespace AcrfAnnotationTool.Views;
 
 public partial class AcrfEditorView : UserControl
 {
+    private static readonly string[] CrfDatabaseTypeNames =
+    [
+        "Rave",
+        "VieDoc",
+        "Aurora Prime",
+        "Taimei"
+    ];
+
     private TopLevel? _shortcutRoot;
+    private bool _crfExtractionRunning;
+    private bool _updatingDomainAnnotationSettings;
 
     protected override void OnAttachedToVisualTree(VisualTreeAttachmentEventArgs e)
     {
@@ -57,7 +68,11 @@ public partial class AcrfEditorView : UserControl
 
     public AcrfEditorView()
     {
+        _updatingDomainAnnotationSettings = true;
         InitializeComponent();
+        _updatingDomainAnnotationSettings = false;
+        CrfExtractionTypeComboBox.ItemsSource = CrfDatabaseTypeNames;
+        CrfExtractionTypeComboBox.SelectedIndex = 0;
         PdfDock.DockHost = PanelDock;
         var settings = ApplicationSettingsStore.Load();
         if (settings.PanelDock is { } panelLayout) PanelDock.RestoreLayoutState(panelLayout);
@@ -84,41 +99,103 @@ public partial class AcrfEditorView : UserControl
         return ApplicationSettingsStore.TrySave(settings, out error);
     }
 
-    private void OnDomainAnnotationSettingsClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+    private void OnExtractCrfButtonClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
     {
-        if (DataContext is not AcrfDocumentViewModel viewModel)
+        if (_crfExtractionRunning || DataContext is not AcrfDocumentViewModel viewModel)
             return;
 
-        DomainAnnotationHorizontalOffsetInput.Value = (decimal)viewModel.DomainAnnotationHorizontalOffset;
-        DomainAnnotationVerticalOffsetInput.Value = (decimal)viewModel.DomainAnnotationVerticalOffset;
-        PdfAnnotationEditingCheckBox.IsChecked = viewModel.IsPdfAnnotationEditingEnabled;
-        LanguageToggleSwitch.IsChecked = viewModel.Language;
-        DomainAnnotationSettingsErrorText.IsVisible = false;
-        DomainAnnotationSettingsDialog.PlacementTarget = DomainAnnotationSettingsButton;
-        DomainAnnotationSettingsDialog.IsOpen = true;
+        CrfExtractionErrorText.IsVisible = false;
+        if (string.IsNullOrWhiteSpace(viewModel.PdfPath))
+        {
+            CrfExtractionErrorText.Text = "请先导入 aCRF PDF。";
+            CrfExtractionErrorText.IsVisible = true;
+        }
+
+        CrfExtractionDialog.PlacementTarget = ExtractCrfButton;
+        CrfExtractionDialog.IsOpen = true;
     }
 
-    private void OnDomainAnnotationDialogButtonClicked(object? sender, AtomDialogButtonClickedEventArgs e)
+    private async void OnCrfExtractionDialogButtonClicked(object? sender, AtomDialogButtonClickedEventArgs e)
     {
-        if (sender is not AtomDialog dialog || e.SourceButton.Role != AtomDialogButtonRole.AcceptRole)
+        if (sender is not AtomDialog dialog)
             return;
 
-        if (DomainAnnotationHorizontalOffsetInput.Value is not decimal horizontalValue ||
-            DomainAnnotationVerticalOffsetInput.Value is not decimal verticalValue)
+        if (e.SourceButton.Role != AtomDialogButtonRole.AcceptRole)
         {
-            DomainAnnotationSettingsErrorText.Text = "请输入水平和垂直距离。";
-            DomainAnnotationSettingsErrorText.IsVisible = true;
+            dialog.IsOpen = false;
             return;
         }
 
         if (DataContext is not AcrfDocumentViewModel viewModel)
+        {
+            dialog.IsOpen = false;
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(viewModel.PdfPath))
+        {
+            CrfExtractionErrorText.Text = "请先导入 aCRF PDF。";
+            CrfExtractionErrorText.IsVisible = true;
+            return;
+        }
+
+        if (CrfExtractionTypeComboBox.SelectedIndex is < 0 or >= 4)
+        {
+            CrfExtractionErrorText.Text = "请选择数据库类型。";
+            CrfExtractionErrorText.IsVisible = true;
+            return;
+        }
+
+        var databaseType = (CrfDatabaseType)CrfExtractionTypeComboBox.SelectedIndex;
+        dialog.IsOpen = false;
+        _crfExtractionRunning = true;
+        ExtractCrfButton.IsDisabled = true;
+        try
+        {
+            await viewModel.ExtractCrfWithResultAsync(databaseType);
+        }
+        finally
+        {
+            _crfExtractionRunning = false;
+            ExtractCrfButton.IsDisabled = false;
+        }
+    }
+
+    private void OnDomainAnnotationSettingsOpened(object? sender, EventArgs e)
+    {
+        if (DataContext is not AcrfDocumentViewModel viewModel)
+            return;
+
+        _updatingDomainAnnotationSettings = true;
+        try
+        {
+            DomainAnnotationHorizontalOffsetInput.Value = (decimal)viewModel.DomainAnnotationHorizontalOffset;
+            DomainAnnotationVerticalOffsetInput.Value = (decimal)viewModel.DomainAnnotationVerticalOffset;
+            PdfAnnotationEditingCheckBox.IsChecked = viewModel.IsPdfAnnotationEditingEnabled;
+            LanguageToggleSwitch.IsChecked = viewModel.Language;
+        }
+        finally
+        {
+            _updatingDomainAnnotationSettings = false;
+        }
+    }
+
+    private void OnDomainAnnotationSettingChanged(object? sender, RoutedEventArgs e)
+    {
+        if (_updatingDomainAnnotationSettings || DataContext is not AcrfDocumentViewModel viewModel)
+            return;
+
+        var horizontalValue = DomainAnnotationHorizontalOffsetInput.Value;
+        var verticalValue = DomainAnnotationVerticalOffsetInput.Value;
+        // An emptied offset input keeps the last applied value; the other settings still apply.
+        if ((sender == DomainAnnotationHorizontalOffsetInput && horizontalValue is null) ||
+            (sender == DomainAnnotationVerticalOffsetInput && verticalValue is null))
             return;
 
         viewModel.ApplyDomainAnnotationSettings(
-            (double)horizontalValue,
-            (double)verticalValue,
+            (double)(horizontalValue ?? (decimal)viewModel.DomainAnnotationHorizontalOffset),
+            (double)(verticalValue ?? (decimal)viewModel.DomainAnnotationVerticalOffset),
             PdfAnnotationEditingCheckBox.IsChecked == true,
             LanguageToggleSwitch.IsChecked == true);
-        dialog.IsOpen = false;
     }
 }

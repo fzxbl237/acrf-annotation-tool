@@ -1,4 +1,5 @@
 ﻿using Avalonia;
+using Avalonia.Media;
 using Avalonia.Media.Fonts;
 using AtomUI;
 using AtomUI.Desktop.Controls;
@@ -7,12 +8,21 @@ using AtomUI.Theme;
 
 namespace AcrfAnnotationTool;
 
-internal sealed class AcrfProjectFontCollection : EmbeddedFontCollection
+internal sealed class AcrfProjectFontCollection : FontCollectionBase
 {
-    public AcrfProjectFontCollection() : base(
-        new Uri("fonts:AcrfProjectFonts", UriKind.Absolute),
-        new Uri("avares://AcrfAnnotationTool/Fonts", UriKind.Absolute))
+    private static readonly Uri CollectionKey = new("fonts:AcrfProjectFonts", UriKind.Absolute);
+
+    public static FontFamily AnnotationFontFamily { get; } = new("fonts:AcrfProjectFonts#Arial Unicode MS");
+
+    public override Uri Key => CollectionKey;
+
+    public AcrfProjectFontCollection()
     {
+        var fontPath = Path.Combine(AppContext.BaseDirectory, "Fonts", "ARIALUNI.TTF");
+        if (!File.Exists(fontPath))
+            throw new FileNotFoundException("The Chinese annotation font was not found.", fontPath);
+        if (!TryAddFontSource(new Uri(fontPath)))
+            throw new InvalidDataException($"Could not load the Chinese annotation font: {fontPath}");
     }
 }
 
@@ -33,10 +43,6 @@ internal static class Program
                 builder.UseDesktopControls();
             })
             .WithInterFont()
-            .ConfigureFonts(fontManager =>
-            {
-                fontManager.AddFontCollection(new AcrfProjectFontCollection());
-            })
             .LogToTrace();
     }
 }

@@ -10,9 +10,9 @@
     <EnableTrimAnalyzer>true</EnableTrimAnalyzer>
     <RootNamespace>AcrfAnnotationTool</RootNamespace>
     <AssemblyName>AcrfAnnotationTool</AssemblyName>
-    <Version>0.46</Version>
-    <AssemblyVersion>0.46.0.0</AssemblyVersion>
-    <FileVersion>0.46.0.0</FileVersion>
+    <Version>0.48</Version>
+    <AssemblyVersion>0.48.0.0</AssemblyVersion>
+    <FileVersion>0.48.0.0</FileVersion>
   </PropertyGroup>
 
   <PropertyGroup Condition="'$(Configuration)' == 'Release' and '$(RuntimeIdentifier)' != '' and '$(PublishAot)' != 'false'">
@@ -62,10 +62,9 @@
           CopyToPublishDirectory="PreserveNewest" />
     <!-- 只有下面几个字体被代码或主题实际引用：
          ARIAL / ARIALBD / ARIALUNI 由 ProjectFontResolver 与注释文本测量按文件名读取，
-         AlibabaPuHuiTi 由 AcrfProjectFontCollection 以 avares 嵌入。
+         ARIALUNI 也由 AcrfProjectFontCollection 从程序目录加载，AlibabaPuHuiTi 保留为 avares 嵌入资源。
          其余 Arial 变体（斜体、窄体、黑体）没有被引用，不再随输出复制。 -->
     <AvaloniaResource Include="Fonts\AlibabaPuHuiTi-3-55-Regular.otf" />
-    <AvaloniaResource Include="Fonts\ARIALUNI.TTF" />
     <None Include="Fonts\ARIAL.TTF"
           CopyToOutputDirectory="PreserveNewest"
           CopyToPublishDirectory="PreserveNewest" />
@@ -83,5 +82,7 @@
           CopyToPublishDirectory="PreserveNewest" />
     <PackageReference Include="Docnet.Core" Version="2.6.0" />
     <PackageReference Include="PDFsharp" Version="6.2.4" />
+    <!-- Same build as KT_Tools so the CRF extractors keep identical layout results. -->
+    <PackageReference Include="PdfPig" Version="0.1.15-alpha-20260328-e5c04" />
   </ItemGroup>
 </Project>

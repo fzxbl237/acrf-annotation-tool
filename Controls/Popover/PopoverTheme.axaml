@@ -1,0 +1,50 @@
+<ResourceDictionary xmlns="https://github.com/avaloniaui"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                    xmlns:controls="using:AcrfAnnotationTool.Controls">
+    <!-- In place the popover shows only its Trigger; its Content opens in an anchored PopoverSurface. -->
+    <ControlTheme x:Key="{x:Type controls:Popover}" TargetType="controls:Popover">
+        <Setter Property="Template">
+            <ControlTemplate TargetType="controls:Popover">
+                <ContentPresenter Name="PART_TriggerPresenter" Content="{TemplateBinding Trigger}" />
+            </ControlTemplate>
+        </Setter>
+        <Setter Property="ClipToBounds" Value="False" />
+    </ControlTheme>
+
+    <ControlTheme x:Key="{x:Type controls:PopoverSurface}" TargetType="controls:PopoverSurface">
+        <Setter Property="Template">
+            <ControlTemplate TargetType="controls:PopoverSurface">
+                <Panel>
+                    <Border Name="PART_Shadow"
+                            Margin="{TemplateBinding ShadowRoom}"
+                            Background="{TemplateBinding Background}"
+                            CornerRadius="{TemplateBinding CornerRadius}"
+                            BoxShadow="0 8 24 0 #26000000"
+                            IsHitTestVisible="False" />
+                    <Border Name="PART_Frame"
+                            Margin="{TemplateBinding ShadowRoom}"
+                            Background="{TemplateBinding Background}"
+                            BorderBrush="{TemplateBinding BorderBrush}"
+                            BorderThickness="{TemplateBinding BorderThickness}"
+                            CornerRadius="{TemplateBinding CornerRadius}"
+                            Padding="{TemplateBinding Padding}">
+                        <ContentPresenter Name="PART_ContentPresenter"
+                                          Content="{TemplateBinding Content}"
+                                          ContentTemplate="{TemplateBinding ContentTemplate}" />
+                    </Border>
+                </Panel>
+            </ControlTemplate>
+        </Setter>
+        <Setter Property="Background" Value="#FFFFFFFF" />
+        <Setter Property="Foreground" Value="#FF181D1F" />
+        <Setter Property="BorderBrush" Value="#FFE5E7EB" />
+        <Setter Property="BorderThickness" Value="1" />
+        <Setter Property="CornerRadius" Value="10" />
+        <Setter Property="Padding" Value="16" />
+        <Setter Property="MinWidth" Value="220" />
+        <Setter Property="MaxWidth" Value="380" />
+        <Setter Property="FontSize" Value="13" />
+        <Setter Property="KeyboardNavigation.TabNavigation" Value="Cycle" />
+        <Setter Property="FocusAdorner" Value="{x:Null}" />
+    </ControlTheme>
+</ResourceDictionary>

@@ -44,6 +44,7 @@
                 <menus:MenuEntry x:Name="FontSize24MenuItem" Header="24" Click="FontSizeMenuItem_OnClick" CommandParameter="24" />
                 <menus:MenuEntry x:Name="BoldMenuItem" Header="Bold" HasSeparatorBefore="True" ToggleType="CheckBox" Click="BoldMenuItem_OnClick" />
             </menus:MenuEntry.Items></menus:MenuEntry>
+            <menus:MenuEntry x:Name="FontDiagnosticsMenuItem" Header="字体诊断…" HasSeparatorBefore="True" Click="FontDiagnosticsMenuItem_OnClick" />
             <menus:MenuEntry Header="Delete" IsDestructive="True" HasSeparatorBefore="True" Click="DeleteMenuItem_OnClick" />
         </menus:MenuSurface>
     </menus:ContextMenu.Menu>

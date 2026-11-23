@@ -2,8 +2,9 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:antd-icons="https://atomui.net/icons/antdesign"
              xmlns:atom="https://atomui.net"
+             xmlns:controls="using:AcrfAnnotationTool.Controls"
              x:Class="PdfViewerControl.Controls.PdfViewer"
-             Background="#FFF3F4F6">
+             Background="#FFF1F1F1" Focusable="True">
     <Grid>
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
@@ -13,6 +14,7 @@
         <Border Grid.Row="0" Background="#FFF9FAFB" BorderBrush="#FFE5E7EB" BorderThickness="0,0,0,1" Padding="10,4">
             <StackPanel VerticalAlignment="Center">
                 <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" VerticalAlignment="Center">
+                    <atom:IconButton x:Name="PdfSearchButton" Icon="{antd-icons:AntDesignIconProvider Kind=SearchOutlined}" IconWidth="15" IconHeight="15" Width="28" Height="28" MinWidth="0" MinHeight="0" Padding="0" Margin="0,0,8,0" Foreground="#FF6B7280" ToolTip.Tip="搜索 PDF 原文 (Ctrl+F)" Click="OnPdfSearchButtonClick" />
                     <atom:ComboBox x:Name="ZoomComboBox" Width="88" Height="32" MinHeight="32" Padding="6,0" VerticalContentAlignment="Center" HorizontalContentAlignment="Center" IsEditable="True" SelectedIndex="2" FontSize="13" FontWeight="Normal" Foreground="#FF6B7280" Background="White" BorderBrush="#FFE5E7EB" BorderThickness="1" CornerRadius="6" SelectionChanged="ZoomComboBox_OnSelectionChanged" KeyDown="ZoomComboBox_OnKeyDown" LostFocus="ZoomComboBox_OnLostFocus">
                         <atom:ComboBoxItem Content="50%" />
                         <atom:ComboBoxItem Content="75%" />
@@ -36,9 +38,22 @@
                 <Slider x:Name="ZoomSlider" Width="1" Height="1" Opacity="0" IsHitTestVisible="False" Minimum="25" Maximum="400" Value="100" ValueChanged="ZoomSlider_OnValueChanged" />
             </StackPanel>
         </Border>
-        <ScrollViewer x:Name="MainScrollViewer" Grid.Row="1" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" ScrollChanged="MainScrollViewer_OnScrollChanged" PointerPressed="ScrollViewer_OnBackgroundClick">
+        <ScrollViewer x:Name="MainScrollViewer" Grid.Row="1" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto" ScrollChanged="MainScrollViewer_OnScrollChanged" PointerPressed="OnPdfTextPointerPressed" PointerMoved="OnPdfTextPointerMoved" PointerReleased="OnPdfTextPointerReleased" PointerCaptureLost="OnPdfTextPointerCaptureLost" PointerExited="OnPdfTextPointerExited" ContextRequested="OnPdfTextContextRequested">
             <StackPanel x:Name="PagesPanel" HorizontalAlignment="Center" Margin="16" />
         </ScrollViewer>
+        <Border x:Name="PdfSearchBar" Grid.Row="1" IsVisible="False" HorizontalAlignment="Right" VerticalAlignment="Top" Margin="8" Padding="8" Background="#FAFFFFFF" BorderBrush="#FFE5E7EB" BorderThickness="1" CornerRadius="8" BoxShadow="0 2 8 #18000000" ZIndex="12" MaxWidth="360">
+            <Grid RowDefinitions="Auto,Auto" ColumnDefinitions="*,Auto,Auto,Auto" MinWidth="280">
+                <TextBox x:Name="PdfSearchTextBox" Grid.Column="0" MinWidth="100" Height="30" MinHeight="0" Padding="6,3" PlaceholderText="搜索 PDF 原文" TextChanged="OnPdfSearchTextChanged" />
+                <atom:IconButton x:Name="PdfSearchPreviousButton" Grid.Column="1" Icon="{antd-icons:AntDesignIconProvider Kind=UpOutlined}" IconWidth="12" IconHeight="12" Width="26" Height="28" MinWidth="0" MinHeight="0" Padding="0" ToolTip.Tip="上一个 (Shift+Enter / Shift+F3)" Click="OnPdfSearchPreviousClick" />
+                <atom:IconButton x:Name="PdfSearchNextButton" Grid.Column="2" Icon="{antd-icons:AntDesignIconProvider Kind=DownOutlined}" IconWidth="12" IconHeight="12" Width="26" Height="28" MinWidth="0" MinHeight="0" Padding="0" ToolTip.Tip="下一个 (Enter / F3)" Click="OnPdfSearchNextClick" />
+                <atom:IconButton Grid.Column="3" Icon="{antd-icons:AntDesignIconProvider Kind=CloseOutlined}" IconWidth="12" IconHeight="12" Width="26" Height="28" MinWidth="0" MinHeight="0" Padding="0" ToolTip.Tip="关闭 (Esc)" Click="OnPdfSearchCloseClick" />
+                <StackPanel Grid.Row="1" Grid.ColumnSpan="4" Orientation="Horizontal" Spacing="10" Margin="0,5,0,0">
+                    <CheckBox x:Name="PdfSearchMatchCase" Content="区分大小写" FontSize="12" MinHeight="24" Click="OnPdfSearchOptionsChanged" />
+                    <CheckBox x:Name="PdfSearchWholeWord" Content="整词" FontSize="12" MinHeight="24" Click="OnPdfSearchOptionsChanged" />
+                    <TextBlock x:Name="PdfSearchCountText" Text="0 / 0" FontSize="12" Foreground="#FF6B7280" VerticalAlignment="Center" />
+                </StackPanel>
+            </Grid>
+        </Border>
         <Grid x:Name="PageNumberHotspot" Grid.Row="1" Height="84" VerticalAlignment="Bottom" HorizontalAlignment="Stretch" ZIndex="10" Background="Transparent" IsHitTestVisible="False" />
         <Border x:Name="PageNumberBar" Grid.Row="1" IsVisible="False" HorizontalAlignment="Center" VerticalAlignment="Bottom" Margin="0,0,0,12" Padding="6,3" Background="#F5FFFFFF" BorderBrush="#FFE5E7EB" BorderThickness="1" CornerRadius="10" BoxShadow="0 1 4 #10000000" ZIndex="11" PointerEntered="PageNumberHotspot_OnPointerEntered" PointerExited="PageNumberHotspot_OnPointerExited">
             <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Spacing="2">
@@ -57,7 +72,7 @@
         <Grid Grid.Row="0" Grid.RowSpan="3" x:Name="LoadingOverlay" IsVisible="False" Background="#A6FFFFFF">
             <Border HorizontalAlignment="Center" VerticalAlignment="Center" Background="White" CornerRadius="8" Padding="28,20" BorderBrush="#FFE5E7EB" BorderThickness="1">
                 <StackPanel HorizontalAlignment="Center" Spacing="12">
-                    <ProgressBar IsIndeterminate="True" Width="200" Height="4" />
+                    <controls:MorphLoader Variant="Bars" Size="28" Foreground="#FF6B7280" IsDecorative="True" />
                     <TextBlock x:Name="LoadingText" Text="正在加载 PDF…" HorizontalAlignment="Center" Foreground="#FF6B7280" FontSize="13" />
                 </StackPanel>
             </Border>

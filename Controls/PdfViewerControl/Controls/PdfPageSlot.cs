@@ -9,6 +9,7 @@ internal sealed class PdfPageSlot
     public Panel? PageRoot { get; set; }
     public Image? PageImage { get; set; }
     public TextBlock? LoadingOverlay { get; set; }
+    public PdfTextOverlay? TextOverlay { get; set; }
     public Canvas? DomainAnnotationLayer { get; set; }
     public List<FreeTextAnnotationControl> DomainAnnotations { get; } = new();
     public List<FreeTextAnnotationModel> DomainAnnotationModels { get; } = new();

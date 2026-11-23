@@ -1,6 +1,16 @@
+using System.Globalization;
+using System.Runtime.InteropServices;
+using System.Security.Cryptography;
+using System.Text;
+using AcrfAnnotationTool;
 using AcrfAnnotationTool.Controls.Menus;
 using Avalonia;
 using Avalonia.Controls;
+using Avalonia.Controls.Presenters;
+using Avalonia.Input.Platform;
+using Avalonia.Layout;
+using Avalonia.Media.TextFormatting;
+using Avalonia.VisualTree;
 using Avalonia.Input;
 using Avalonia.Media;
 using Avalonia.Threading;
@@ -29,7 +39,7 @@ public partial class FreeTextAnnotationControl : UserControl
     {
         InitializeComponent(); ClipToBounds = false;
         Editor.IsReadOnly = !IsAnnotationEditingEnabled;
-        AnnotationMenu.IsEnabled = IsAnnotationEditingEnabled;
+        UpdateMenuEditability();
         Editor.TextChanged += (_, _) => UpdatePlaceholder();
         Editor.GotFocus += (_, _) => { DragOverlay.IsVisible = false; Placeholder.IsVisible = false; if (IsPlaceholderContent(Editor.Text)) Editor.Text = string.Empty; };
         Editor.LostFocus += (_, _) => EndEdit();
@@ -51,7 +61,7 @@ public partial class FreeTextAnnotationControl : UserControl
             {
                 if (!IsAnnotationEditingEnabled && Editor.IsFocused) EndEdit();
                 Editor.IsReadOnly = !IsAnnotationEditingEnabled;
-                AnnotationMenu.IsEnabled = IsAnnotationEditingEnabled;
+                UpdateMenuEditability();
                 if (!IsAnnotationEditingEnabled) AnnotationMenu.Close(false);
                 ApplyModelToUi();
                 AnnotationAdornerService.UpdateAdornerState(this);
@@ -154,7 +164,7 @@ public partial class FreeTextAnnotationControl : UserControl
         {
             if (isArialUnicodeMs)
             {
-                Editor.FontFamily = new FontFamily(new Uri("fonts:AcrfProjectFonts", UriKind.Absolute), "Arial Unicode MS");
+                Editor.FontFamily = AcrfProjectFontCollection.AnnotationFontFamily;
             }
             else
             {
@@ -267,5 +277,180 @@ public partial class FreeTextAnnotationControl : UserControl
         NotifyResizeCommitted();
         if (Parent is PageAnnotationCanvas page) page.RefreshCallout(this);
     }
+    private void UpdateMenuEditability()
+    {
+        // Diagnostics are read-only and remain available when annotation editing is disabled.
+        foreach (var entry in AnnotationMenu.Items.OfType<MenuEntry>())
+            entry.IsEnabled = ReferenceEquals(entry, FontDiagnosticsMenuItem) || IsAnnotationEditingEnabled;
+    }
+
+    private void FontDiagnosticsMenuItem_OnClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+    {
+        // Let the menu finish closing before moving focus to the report window.
+        Dispatcher.Post(ShowFontDiagnostics, DispatcherPriority.Background);
+    }
+
+    private async void ShowFontDiagnostics()
+    {
+        if (Model == null || TopLevel.GetTopLevel(this) is not Window owner) return;
+        string report;
+        try
+        {
+            report = BuildFontDiagnosticsReport();
+        }
+        catch (Exception exception)
+        {
+            report = $"读取字体诊断失败：{exception.Message}";
+        }
+
+        var reportBox = new TextBox
+        {
+            Text = report,
+            IsReadOnly = true,
+            AcceptsReturn = true,
+            TextWrapping = TextWrapping.NoWrap,
+            FontSize = 13,
+            HorizontalAlignment = HorizontalAlignment.Stretch,
+            VerticalAlignment = VerticalAlignment.Stretch
+        };
+        ScrollViewer.SetHorizontalScrollBarVisibility(reportBox, Avalonia.Controls.Primitives.ScrollBarVisibility.Auto);
+        ScrollViewer.SetVerticalScrollBarVisibility(reportBox, Avalonia.Controls.Primitives.ScrollBarVisibility.Auto);
+        var copyButton = new Button { Content = "复制报告" };
+        var closeButton = new Button { Content = "关闭" };
+        var status = new TextBlock { VerticalAlignment = VerticalAlignment.Center };
+        var buttons = new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            Spacing = 8,
+            Margin = new Thickness(0, 12, 0, 0),
+            Children = { copyButton, closeButton, status }
+        };
+        var content = new Grid { RowDefinitions = new RowDefinitions("*,Auto"), Margin = new Thickness(16) };
+        Grid.SetRow(buttons, 1);
+        content.Children.Add(reportBox);
+        content.Children.Add(buttons);
+        var dialog = new Window
+        {
+            Title = "注释字体诊断",
+            Width = 820,
+            Height = 620,
+            MinWidth = 360,
+            MinHeight = 240,
+            WindowStartupLocation = WindowStartupLocation.CenterOwner,
+            Content = content
+        };
+        copyButton.Click += async (_, _) =>
+        {
+            try
+            {
+                var clipboard = TopLevel.GetTopLevel(dialog)?.Clipboard;
+                if (clipboard == null) { status.Text = "剪贴板不可用，可选中文本后复制。"; return; }
+                await clipboard.SetTextAsync(report);
+                status.Text = "已复制";
+            }
+            catch (Exception exception)
+            {
+                status.Text = $"复制失败：{exception.Message}";
+            }
+        };
+        closeButton.Click += (_, _) => dialog.Close();
+        dialog.KeyDown += (_, args) => { if (args.Key == Key.Escape) { dialog.Close(); args.Handled = true; } };
+        await dialog.ShowDialog(owner);
+    }
+
+    private string BuildFontDiagnosticsReport()
+    {
+        var report = new StringBuilder();
+        void Add(FormattableString line) => report.AppendLine(line.ToString(CultureInfo.InvariantCulture));
+        static string Escape(string text) => text.Replace("\\", "\\\\").Replace("\r", "\\r").Replace("\n", "\\n").Replace("\t", "\\t");
+
+        report.AppendLine("注释字体诊断（读取当前 Editor.TextPresenter.TextLayout，不是重新测量的替代布局）");
+        Add($"时间：{DateTimeOffset.Now:O}");
+        Add($"程序版本：{typeof(FreeTextAnnotationControl).Assembly.GetName().Version}");
+        Add($"系统：{RuntimeInformation.OSDescription} / {RuntimeInformation.ProcessArchitecture}");
+        Add($"注释 ID：{Model?.Id}；页码：{Model?.PageIndex + 1}");
+        Add($"注释文本：{Escape(Editor.Text ?? string.Empty)}");
+        Add($"模型请求字体：{Model?.FontFamily}");
+        Add($"Editor.FontFamily：{Editor.FontFamily}");
+        Add($"Editor 字体集合键：{Editor.FontFamily.Key?.ToString() ?? "(system)"}");
+        Add($"字重/样式/拉伸：{Editor.FontWeight} / {Editor.FontStyle} / {Editor.FontStretch}");
+        Add($"字号：{Model?.FontSize:0.###} pt；Editor：{Editor.FontSize:0.###} DIP");
+        Add($"PDF→DIP 缩放：{_displayScale:0.######}；屏幕 RenderScaling：{TopLevel.GetTopLevel(this)?.RenderScaling:0.###}");
+        Add($"PDF 注释矩形：{Model?.Width:0.###} × {Model?.Height:0.###} pt（不是表格的原始 Width）");
+        Add($"控件尺寸：{Bounds.Width:0.###} × {Bounds.Height:0.###} DIP；Editor：{Editor.Bounds.Width:0.###} × {Editor.Bounds.Height:0.###} DIP");
+        Add($"边框：{Chrome.BorderThickness}；内边距：{Chrome.Padding}");
+        var requested = new Typeface(Editor.FontFamily, Editor.FontStyle, Editor.FontWeight, Editor.FontStretch).GlyphTypeface;
+        Add($"请求字体解析结果：{requested.FamilyName} / {requested.TypographicFamilyName}；{requested.Weight} / {requested.Style}");
+
+        var fontPath = Path.Combine(AppContext.BaseDirectory, "Fonts", "ARIALUNI.TTF");
+        string? projectFontHash = null;
+        Add($"项目中文字体文件：{fontPath}");
+        try
+        {
+            using var stream = File.OpenRead(fontPath);
+            projectFontHash = Convert.ToHexString(SHA256.HashData(stream));
+            Add($"字体文件大小：{stream.Length} bytes；SHA-256：{projectFontHash}");
+        }
+        catch (Exception exception)
+        {
+            Add($"无法校验字体文件：{exception.Message}");
+        }
+
+        var fontDataHashes = new Dictionary<GlyphTypeface, string?>();
+        string? GetFontDataHash(GlyphTypeface font)
+        {
+            if (fontDataHashes.TryGetValue(font, out var hash)) return hash;
+            try
+            {
+                if (font.PlatformTypeface.TryGetStream(out var stream))
+                {
+                    using (stream)
+                        hash = Convert.ToHexString(SHA256.HashData(stream));
+                }
+            }
+            catch (Exception exception)
+            {
+                Add($"  无法读取实际字体数据：{exception.Message}");
+            }
+            fontDataHashes.Add(font, hash);
+            return hash;
+        }
+
+        var presenter = Editor.GetVisualDescendants().OfType<TextPresenter>().FirstOrDefault();
+        if (presenter == null)
+        {
+            report.AppendLine("未找到 TextPresenter，无法获取实际字形字体；请确认注释已显示后重试。");
+        }
+        else
+        {
+            var layout = presenter.TextLayout;
+            Add($"实际布局宽度：{layout.Width:0.###} DIP；含行尾空白：{layout.WidthIncludingTrailingWhitespace:0.###} DIP");
+            report.AppendLine("以下为实际绘制的字形字体；同一注释可能按文字片段回退到不同字体。");
+            var lineIndex = 0;
+            foreach (var line in layout.TextLines)
+            {
+                Add($"行 {++lineIndex}：字宽 {line.Width:0.###} DIP = {line.Width / _displayScale:0.###} pt；含行尾空白 {line.WidthIncludingTrailingWhitespace:0.###} DIP");
+                foreach (var run in line.TextRuns)
+                {
+                    if (run is not ShapedTextRun shaped) continue;
+                    var glyphRun = shaped.GlyphRun;
+                    var font = glyphRun.GlyphTypeface;
+                    Add($"  文本片段：{Escape(shaped.Text.ToString())}");
+                    Add($"  实际字体：{font.FamilyName}；TypographicFamilyName：{font.TypographicFamilyName}");
+                    Add($"  实际字重/样式/拉伸：{font.Weight} / {font.Style} / {font.Stretch}；模拟：{font.FontSimulations}");
+                    Add($"  与请求解析字面为同一实例：{ReferenceEquals(font, requested)}（仅用于观察字体回退，不证明文件来源）");
+                    var actualFontHash = GetFontDataHash(font);
+                    Add($"  实际字形字体数据 SHA-256：{actualFontHash ?? "不可读取"}");
+                    Add($"  实际字体数据与程序目录 ARIALUNI.TTF 一致：{(actualFontHash == null || projectFontHash == null ? "无法验证" : (actualFontHash == projectFontHash).ToString())}");
+                    Add($"  字形字号：{glyphRun.FontRenderingEmSize:0.###} DIP；字形墨迹宽度：{glyphRun.InkBounds.Width:0.###} DIP");
+                }
+            }
+        }
+
+        report.AppendLine("注：字体数据一致通过实际字形的底层字体流与磁盘文件 SHA-256 比较，不是仅比较字体家族名称。");
+        report.AppendLine("注：DIP 为逻辑像素，pt 为 PDF 点；字宽为排版前进宽度，不等于可见墨迹最右边界。");
+        return report.ToString();
+    }
+
     private void DeleteMenuItem_OnClick(object? s, Avalonia.Interactivity.RoutedEventArgs e) { if (IsAnnotationEditingEnabled) DeleteRequested?.Invoke(this, EventArgs.Empty); }
 }

@@ -1,4 +1,4 @@
-﻿using System.Globalization;
+using System.Globalization;
 using System.Runtime.CompilerServices;
 using PdfSharp.Pdf.Advanced;
 using System.Security;
@@ -497,10 +497,28 @@ public static partial class PdfAnnotationService
     {
         GlobalFontSettings.UseWindowsFontsUnderWindows = true;
 
+        // Embed only the faces the annotations actually reference. The previous unconditional three-face
+        // setup made every save load and subset Arial Unicode (a 22 MB TTF) even for pure-ASCII documents.
+        var needsRegular = false;
+        var needsBold = false;
+        var needsUnicode = false;
+        foreach (var annotation in annotations)
+        {
+            if (NeedsUnicodeFont(annotation.Text))
+                needsUnicode = true;
+            else if (annotation.IsBold)
+                needsBold = true;
+            else
+                needsRegular = true;
+        }
+
         var result = new PdfDictionary(document);
-        AddAnnotationFontResource(document, result, "/Arial", "Arial", XFontStyleEx.Regular, "A");
-        AddAnnotationFontResource(document, result, "/ArialBold", "Arial", XFontStyleEx.Bold, "A");
-        AddAnnotationFontResource(document, result, "/ArialUnicode", "Arial Unicode MS", XFontStyleEx.Regular, "中");
+        if (needsRegular)
+            AddAnnotationFontResource(document, result, "/Arial", "Arial", XFontStyleEx.Regular, "A");
+        if (needsBold)
+            AddAnnotationFontResource(document, result, "/ArialBold", "Arial", XFontStyleEx.Bold, "A");
+        if (needsUnicode)
+            AddAnnotationFontResource(document, result, "/ArialUnicode", "Arial Unicode MS", XFontStyleEx.Regular, "中");
 
         var resourceDictionary = new PdfDictionary(document);
         resourceDictionary.Elements.SetObject("/Font", result);

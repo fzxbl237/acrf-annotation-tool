@@ -21,7 +21,7 @@
                     VerticalAlignment="Center" />
                 <TextBlock
                     Foreground="#FF64748B"
-                    Text="v0.46"
+                    Text="v0.48"
                     VerticalAlignment="Center" />
                 <TextBlock
                     Foreground="#FF64748B"

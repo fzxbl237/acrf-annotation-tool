@@ -47,7 +47,7 @@ public sealed partial class Annotation : ObservableObject, ICloneable, INotifyDa
     private bool _calloutEnabled;
 
     [ObservableProperty]
-    private string _calloutShape = string.Empty;
+    private string _calloutShape = "OpenArrow";
 
     [ObservableProperty]
     private bool _calloutIsLeft = true;

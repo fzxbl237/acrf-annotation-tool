@@ -1,4 +1,4 @@
-﻿using Avalonia;
+using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Media;
 using PdfViewerControl.Controls.Annotation;
@@ -60,7 +60,7 @@ public partial class PdfViewer
         _annotations.Where(a => a.PageIndex == pageIndex);
 
     public FreeTextAnnotationModel? GetAnnotationById(string id) =>
-        _annotations.FirstOrDefault(a => a.Id == id);
+        _annotationsById.TryGetValue(id, out var model) ? model : null;
 
     public FreeTextAnnotationModel? CreateAnnotation(
         int pageIndex, double pdfX, double pdfY,
@@ -87,6 +87,7 @@ public partial class PdfViewer
             IsBold = false
         };
         _annotations.Add(model);
+        _annotationsById[model.Id] = model;
 
         if (pageIndex < _pageSlots.Count)
         {
@@ -119,22 +120,21 @@ public partial class PdfViewer
 
     public bool UpdateAnnotation(string id, Action<FreeTextAnnotationModel> updateAction)
     {
-        var model = _annotations.FirstOrDefault(a => a.Id == id);
-        if (model == null) return false;
+        if (!_annotationsById.TryGetValue(id, out var model)) return false;
         updateAction(model);
         if (_annotationControls.TryGetValue(id, out var control))
         {
+            // ApplyLayoutFromPdf already rebuilds the text/chrome; calling ApplyModelToUi again here
+            // only repeated the colour/font parsing and re-assigned Editor.Text.
             var php = _loader.GetPageHeightInPoints(model.PageIndex);
             control.ApplyLayoutFromPdf(php, _loader.DisplayScale);
-            control.ApplyModelToUi();
         }
         return true;
     }
 
     public bool UpdateAnnotationPosition(string id, int pageIndex, double pdfX, double pdfY)
     {
-        var model = _annotations.FirstOrDefault(a => a.Id == id);
-        if (model == null || pageIndex < 0 || pageIndex >= _loader.PageCount) return false;
+        if (!_annotationsById.TryGetValue(id, out var model) || pageIndex < 0 || pageIndex >= _loader.PageCount) return false;
         if (model.PageIndex != pageIndex && pageIndex >= 0 && pageIndex < _loader.PageCount)
         {
             var wasSelected = false;
@@ -170,8 +170,7 @@ public partial class PdfViewer
 
     public bool UpdateAnnotationSize(string id, double width, double height)
     {
-        var model = _annotations.FirstOrDefault(a => a.Id == id);
-        if (model == null) return false;
+        if (!_annotationsById.TryGetValue(id, out var model)) return false;
         model.Width = width;
         model.Height = height;
         if (_annotationControls.TryGetValue(id, out var ctrl))
@@ -187,6 +186,7 @@ public partial class PdfViewer
 
         var model = snapshot.Clone();
         _annotations.Insert(Math.Clamp(index, 0, _annotations.Count), model);
+        _annotationsById[model.Id] = model;
         if (_pageSlots[model.PageIndex].AnnotationLayer is { } layer)
             RebuildAnnotationsForPage(model.PageIndex, _loader.GetPageHeightInPoints(model.PageIndex), _loader.DisplayScale, layer);
         return true;
@@ -212,6 +212,7 @@ public partial class PdfViewer
         _annotations.Clear();
         foreach (var annotation in annotations)
             _annotations.Add(annotation);
+        RebuildAnnotationIndex();
         _annotationControls.Clear();
         _selectedAnnotation = null;
 
@@ -230,7 +231,7 @@ public partial class PdfViewer
 
     public bool SelectAnnotationById(string id)
     {
-        var model = _annotations.FirstOrDefault(annotation => annotation.Id == id);
+        var model = GetAnnotationById(id);
         if (model is null || model.PageIndex < 0 || model.PageIndex >= _pageSlots.Count)
             return false;
         var slot = _pageSlots[model.PageIndex];
@@ -332,7 +333,6 @@ public partial class PdfViewer
                 annotation.IsVisible = true;
                 annotation.IsHitTestVisible = false;
                 annotation.ApplyLayoutFromPdf(pageHeightPoints, scale);
-                annotation.ApplyModelToUi();
             }
             x += model.Width + 4 / scale;
         }
@@ -346,13 +346,12 @@ public partial class PdfViewer
 
     public bool ScrollAnnotationIntoView(string id)
     {
-        var model = _annotations.FirstOrDefault(annotation => annotation.Id == id);
+        var model = GetAnnotationById(id);
         if (model is null) return false;
         var pageIndex = model.PageIndex;
         if (pageIndex < 0 || pageIndex >= _pageSlots.Count) return false;
         MountPageContent(_pageSlots[pageIndex]);
-        double y = 16;
-        for (int i = 0; i < pageIndex && i < _pageSlots.Count; i++) y += GetPageHostHeight(i);
+        var y = GetPageHostTop(pageIndex);
         var annotationTop = _annotationControls.TryGetValue(id, out var control)
             ? Canvas.GetTop(control)
             : PdfCoordinateConverter.PdfToAvalonia(model.PdfX, model.PdfY, model.Height, _loader.GetPageHeightInPoints(pageIndex), _loader.DisplayScale).Y;
@@ -363,7 +362,7 @@ public partial class PdfViewer
         var center = y + annotationTop + annotationHeight / 2;
         var vpH = MainScrollViewer.Bounds.Height;
         var off = Math.Max(0, center - vpH / 2);
-        MainScrollViewer.Offset = new Vector(MainScrollViewer.Offset.X, Math.Min(off, MainScrollViewer.Extent.Height));
+        AnimateViewerScrollTo(new Vector(MainScrollViewer.Offset.X, off));
         _currentPageIndex = pageIndex;
         UpdatePageInfo();
         RequestVirtualizationImmediate();
@@ -372,8 +371,7 @@ public partial class PdfViewer
 
     public bool UpdateAnnotationBackgroundColor(string id, string colorHex)
     {
-        var model = _annotations.FirstOrDefault(a => a.Id == id);
-        if (model == null) return false;
+        if (!_annotationsById.TryGetValue(id, out var model)) return false;
         if (string.Equals(model.BackgroundColorHex, colorHex, StringComparison.OrdinalIgnoreCase))
             return true;
         model.BackgroundColorHex = colorHex;
@@ -383,8 +381,7 @@ public partial class PdfViewer
 
     public bool UpdateAnnotationBackgroundColor(string id, byte r, byte g, byte b)
     {
-        var model = _annotations.FirstOrDefault(a => a.Id == id);
-        if (model == null) return false;
+        if (!_annotationsById.TryGetValue(id, out var model)) return false;
         model.BackgroundColorHex = $"#{r:X2}{g:X2}{b:X2}";
         if (_annotationControls.TryGetValue(id, out var c)) c.UpdateChrome();
         return true;
@@ -395,8 +392,7 @@ public partial class PdfViewer
 
     public bool UpdateAnnotationFontColor(string id, byte r, byte g, byte b)
     {
-        var model = _annotations.FirstOrDefault(a => a.Id == id);
-        if (model == null) return false;
+        if (!_annotationsById.TryGetValue(id, out var model)) return false;
         model.FontColorHex = $"#{r:X2}{g:X2}{b:X2}";
         if (_annotationControls.TryGetValue(id, out var c)) c.ApplyModelToUi();
         return true;
@@ -407,8 +403,8 @@ public partial class PdfViewer
 
     private bool RemoveAnnotationById(string id)
     {
-        var removed = _annotations.RemoveAll(a => a.Id == id) > 0;
-        if (!removed) return false;
+        if (!_annotationsById.Remove(id, out var model)) return false;
+        _annotations.Remove(model);
         if (_annotationControls.Remove(id, out var control))
         {
             var layer = _pageSlots.Select(s => s.AnnotationLayer).OfType<PageAnnotationCanvas>().FirstOrDefault(c => c.Children.Contains(control));

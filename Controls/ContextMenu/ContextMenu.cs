@@ -6,7 +6,9 @@ using Avalonia.Controls;
 using Avalonia.Controls.Templates;
 using Avalonia.Data;
 using Avalonia.Input;
+using Avalonia.Input.Platform;
 using Avalonia.Interactivity;
+using AtomUI.Icons.AntDesign;
 
 namespace AcrfAnnotationTool.Controls.Menus;
 
@@ -30,6 +32,10 @@ public class ContextMenu : ContentControl
     /// </summary>
     public static readonly AttachedProperty<MenuSurface?> MenuProperty =
         AvaloniaProperty.RegisterAttached<ContextMenu, Control, MenuSurface?>("Menu");
+
+    /// <summary>Uses the project context-menu surface for standard text editing actions.</summary>
+    public static readonly AttachedProperty<bool> UseTextEditingMenuProperty =
+        AvaloniaProperty.RegisterAttached<ContextMenu, Control, bool>("UseTextEditingMenu");
 
     /// <summary>Accessible name of both the target and the menu (Arc default: "Context menu").</summary>
     public static readonly StyledProperty<string?> LabelProperty =
@@ -66,6 +72,10 @@ public class ContextMenu : ContentControl
     public static MenuSurface? GetMenu(Control element) => element.GetValue(MenuProperty);
 
     public static void SetMenu(Control element, MenuSurface? value) => element.SetValue(MenuProperty, value);
+
+    public static bool GetUseTextEditingMenu(Control element) => element.GetValue(UseTextEditingMenuProperty);
+
+    public static void SetUseTextEditingMenu(Control element, bool value) => element.SetValue(UseTextEditingMenuProperty, value);
 
     public string? Label
     {
@@ -134,6 +144,8 @@ public class ContextMenu : ContentControl
 
     private static readonly AttachedProperty<ContextMenuAttachment?> AttachmentProperty =
         AvaloniaProperty.RegisterAttached<ContextMenu, Control, ContextMenuAttachment?>("Attachment");
+    private static readonly AttachedProperty<TextEditingMenuAttachment?> TextEditingMenuAttachmentProperty =
+        AvaloniaProperty.RegisterAttached<ContextMenu, Control, TextEditingMenuAttachment?>("TextEditingMenuAttachment");
 
     private bool _pressedWhileOpen;
 
@@ -141,6 +153,7 @@ public class ContextMenu : ContentControl
     {
         FocusableProperty.OverrideDefaultValue<ContextMenu>(true);
         MenuProperty.Changed.AddClassHandler<Control>(OnAttachedMenuChanged);
+        UseTextEditingMenuProperty.Changed.AddClassHandler<Control>(OnUseTextEditingMenuChanged);
     }
 
     public ContextMenu()
@@ -284,6 +297,145 @@ public class ContextMenu : ContentControl
         public void Expand() => Target.Open(null, MenuOpenFocus.First);
 
         public void Collapse() => Target.Close();
+    }
+
+    private static void OnUseTextEditingMenuChanged(Control target, AvaloniaPropertyChangedEventArgs e)
+    {
+        target.GetValue(TextEditingMenuAttachmentProperty)?.Dispose();
+        target.ClearValue(TextEditingMenuAttachmentProperty);
+        if (e.NewValue is true && target is TextBox textBox)
+        {
+            target.SetValue(TextEditingMenuAttachmentProperty, new TextEditingMenuAttachment(textBox));
+        }
+    }
+
+    /// <summary>Project-styled Cut/Copy/Paste/Select All menu for an editable TextBox.</summary>
+    private sealed class TextEditingMenuAttachment : IDisposable
+    {
+        private readonly TextBox _target;
+        private readonly MenuSurface _surface;
+        private readonly MenuEntry _cut;
+        private readonly MenuEntry _copy;
+        private readonly MenuEntry _paste;
+        private readonly MenuEntry _selectAll;
+        private int _pasteCheckGeneration;
+
+        public TextEditingMenuAttachment(TextBox target)
+        {
+            _target = target;
+            _surface = new MenuSurface
+            {
+                Variant = MenuSurfaceVariant.Context,
+                ClosesOnViewportChange = true,
+                ClosesOnAnchorPress = true,
+                FocusReturnTarget = target
+            };
+            _cut = new MenuEntry
+            {
+                Header = "剪切",
+                Icon = new ScissorOutlined { Width = 16, Height = 16 },
+                InputGesture = new KeyGesture(Key.X, KeyModifiers.Control)
+            };
+            _copy = new MenuEntry
+            {
+                Header = "复制",
+                Icon = new CopyOutlined { Width = 16, Height = 16 },
+                InputGesture = new KeyGesture(Key.C, KeyModifiers.Control)
+            };
+            _paste = new MenuEntry
+            {
+                Header = "粘贴",
+                Icon = new SnippetsOutlined { Width = 16, Height = 16 },
+                InputGesture = new KeyGesture(Key.V, KeyModifiers.Control)
+            };
+            _selectAll = new MenuEntry
+            {
+                Header = "全选",
+                Icon = new SelectOutlined { Width = 16, Height = 16 },
+                InputGesture = new KeyGesture(Key.A, KeyModifiers.Control),
+                HasSeparatorBefore = true
+            };
+            _cut.Click += (_, _) => _target.Cut();
+            _copy.Click += (_, _) => _target.Copy();
+            _paste.Click += (_, _) => _target.Paste();
+            _selectAll.Click += (_, _) => _target.SelectAll();
+            _surface.Items.Add(_cut);
+            _surface.Items.Add(_copy);
+            _surface.Items.Add(_paste);
+            _surface.Items.Add(_selectAll);
+
+            target.AddHandler(PointerPressedEvent, OnPointerPressed, RoutingStrategies.Tunnel, handledEventsToo: true);
+            target.AddHandler(ContextRequestedEvent, OnContextRequested, RoutingStrategies.Bubble, handledEventsToo: true);
+            target.DetachedFromVisualTree += OnDetached;
+        }
+
+        private void OnPointerPressed(object? sender, PointerPressedEventArgs e)
+        {
+            if (!e.GetCurrentPoint(_target).Properties.IsRightButtonPressed)
+            {
+                return;
+            }
+            e.Handled = true;
+            OpenAt(e.GetPosition(_target), MenuOpenFocus.Surface);
+        }
+
+        private void OnContextRequested(object? sender, ContextRequestedEventArgs e)
+        {
+            e.Handled = true;
+            if (e.TryGetPosition(_target, out var position))
+            {
+                OpenAt(position, MenuOpenFocus.Surface);
+            }
+            else
+            {
+                OpenAt(BelowTarget(_target), MenuOpenFocus.First);
+            }
+        }
+
+        private void OpenAt(Point position, MenuOpenFocus focus)
+        {
+            var hasSelection = !string.IsNullOrEmpty(_target.SelectedText);
+            _cut.IsEnabled = hasSelection && !_target.IsReadOnly;
+            _copy.IsEnabled = hasSelection;
+            _paste.IsEnabled = false;
+            _selectAll.IsEnabled = !string.IsNullOrEmpty(_target.Text);
+            _surface.OpenAt(_target, position, focus);
+            UpdatePasteEnabledAsync();
+        }
+
+        private async void UpdatePasteEnabledAsync()
+        {
+            var generation = ++_pasteCheckGeneration;
+            if (_target.IsReadOnly || TopLevel.GetTopLevel(_target)?.Clipboard is not { } clipboard)
+            {
+                return;
+            }
+            try
+            {
+                var text = await clipboard.TryGetTextAsync();
+                if (generation == _pasteCheckGeneration && _surface.IsOpen)
+                {
+                    _paste.IsEnabled = !string.IsNullOrEmpty(text) && !_target.IsReadOnly;
+                }
+            }
+            catch
+            {
+                if (generation == _pasteCheckGeneration && _surface.IsOpen)
+                {
+                    _paste.IsEnabled = false;
+                }
+            }
+        }
+
+        private void OnDetached(object? sender, VisualTreeAttachmentEventArgs e) => _surface.Close(returnFocus: false);
+
+        public void Dispose()
+        {
+            _surface.Close(returnFocus: false);
+            _target.RemoveHandler(PointerPressedEvent, OnPointerPressed);
+            _target.RemoveHandler(ContextRequestedEvent, OnContextRequested);
+            _target.DetachedFromVisualTree -= OnDetached;
+        }
     }
 
     #region Attached menus

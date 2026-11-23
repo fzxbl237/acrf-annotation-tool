@@ -774,20 +774,30 @@ public sealed class Dock : UserControl
                 floating.Opacity = 0;
             }
             {
+                var dragContent = new Grid { ColumnDefinitions = new ColumnDefinitions("48,Auto") };
+                dragContent.Children.Add(new Avalonia.Controls.Shapes.Path
+                {
+                    Data = Geometry.Parse("M 8,3 L 8,13 M 3,8 L 13,8"), Stroke = Brushes.White,
+                    StrokeThickness = 1.5, Width = 16, Height = 16,
+                    HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center
+                });
+                var dragTitle = new TextBlock
+                {
+                    Name = "DockDragTitle", Text = PaneTitle, FontSize = 14, FontWeight = FontWeight.SemiBold,
+                    Foreground = Brushes.White, VerticalAlignment = VerticalAlignment.Center,
+                    MaxWidth = 240, TextTrimming = TextTrimming.CharacterEllipsis, Margin = new Thickness(0, 0, 16, 0)
+                };
+                Grid.SetColumn(dragTitle, 1);
+                dragContent.Children.Add(dragTitle);
                 _dragProxy = new Window
                 {
-                    Width = 48, Height = 48, CanResize = false, ShowInTaskbar = false, ShowActivated = false,
+                    SizeToContent = SizeToContent.Width, Height = 48, CanResize = false, ShowInTaskbar = false, ShowActivated = false,
                     WindowDecorations = WindowDecorations.None, Background = Brushes.Transparent,
                     TransparencyLevelHint = new[] { WindowTransparencyLevel.Transparent },
                     Content = new Border
                     {
                         Name = "DockDragProxy", Background = Brush.Parse("#477DFF"), CornerRadius = new CornerRadius(6),
-                        Child = new Avalonia.Controls.Shapes.Path
-                        {
-                            Data = Geometry.Parse("M 8,3 L 8,13 M 3,8 L 13,8"), Stroke = Brushes.White,
-                            StrokeThickness = 1.5, Width = 16, Height = 16,
-                            HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center
-                        }
+                        Child = dragContent
                     }
                 };
                 _dragProxy.Show(_floatingWindow ?? _owner!);

@@ -11,6 +11,11 @@
     xmlns:views="using:AcrfAnnotationTool.Views"
     xmlns:vm="using:AcrfAnnotationTool.ViewModels.Documents"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <UserControl.Styles>
+        <Style Selector="Border#ExtractCrfButtonShell:pointerover controls|ButtonGroupItem">
+            <Setter Property="Background" Value="#FFF1F1F1" />
+        </Style>
+    </UserControl.Styles>
     <Grid Background="#FFF0F2F5" RowDefinitions="Auto,*">
         <Border
             Background="White"
@@ -21,34 +26,121 @@
             Grid.Row="0"
             Margin="8,8,8,4"
             Padding="12,8">
-            <StackPanel Orientation="Horizontal" Spacing="8">
-                <controls:ButtonGroup Label="文件操作">
-                    <controls:ButtonGroupItem x:Name="OpenPdfButton" Label="aCRF 导入" DoneLabel="已导入"
-                                              Icon="{antd-icons:AntDesignIconProvider Kind=FilePdfOutlined}" />
-                    <controls:ButtonGroupItem x:Name="ImportSpecButton" Label="Spec 导入" DoneLabel="已导入"
-                                              Icon="{antd-icons:AntDesignIconProvider Kind=ImportOutlined}" />
-                    <controls:ButtonGroupItem x:Name="ExportSpecButton" Label="Spec 导出" DoneLabel="已导出"
-                                              Icon="{antd-icons:AntDesignIconProvider Kind=ExportOutlined}" />
-                    <controls:ButtonGroupItem x:Name="SavePdfButton" Label="另存 PDF" DoneLabel="已保存"
-                                              Icon="{antd-icons:AntDesignIconProvider Kind=SaveOutlined}" />
-                    <controls:ButtonGroupItem x:Name="SavePdfFlattenButton" Label="另存 PDF 并 Flatten"
-                                              DoneLabel="已保存"
-                                              Icon="{antd-icons:AntDesignIconProvider Kind=FileProtectOutlined}" />
-                </controls:ButtonGroup>
-                <atom:IconButton
-                    Click="OnDomainAnnotationSettingsClick"
-                    Icon="{antd-icons:AntDesignIconProvider Kind=SettingOutlined}"
-                    IconHeight="24"
-                    IconWidth="24"
+            <Grid ColumnDefinitions="*,Auto">
+                <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="8">
+                    <controls:ButtonGroup Label="文件操作">
+                        <controls:ButtonGroupItem x:Name="OpenPdfButton" Label="aCRF 导入" DoneLabel="已导入"
+                                                  Icon="{antd-icons:AntDesignIconProvider Kind=FilePdfOutlined}" />
+                        <controls:ButtonGroupItem x:Name="ImportSpecButton" Label="Spec 导入" DoneLabel="已导入"
+                                                  Icon="{antd-icons:AntDesignIconProvider Kind=ImportOutlined}" />
+                        <controls:ButtonGroupItem x:Name="ExportSpecButton" Label="Spec 导出" DoneLabel="已导出"
+                                                  Icon="{antd-icons:AntDesignIconProvider Kind=ExportOutlined}" />
+                        <controls:ButtonGroupItem x:Name="SavePdfButton" Label="另存 PDF" DoneLabel="已保存"
+                                                  Icon="{antd-icons:AntDesignIconProvider Kind=SaveOutlined}" />
+                        <controls:ButtonGroupItem x:Name="SavePdfFlattenButton" Label="另存 PDF 并 Flatten"
+                                                  DoneLabel="已保存"
+                                                  Icon="{antd-icons:AntDesignIconProvider Kind=FileProtectOutlined}" />
+                    </controls:ButtonGroup>
+                    <controls:Popover
+                        Alignment="End"
+                        IsModal="True"
+                        Opened="OnDomainAnnotationSettingsOpened"
+                        Placement="Bottom"
+                        VerticalAlignment="Center"
+                        x:Name="DomainAnnotationSettingsPopover">
+                        <controls:Popover.Trigger>
+                            <atom:IconButton
+                                Icon="{antd-icons:AntDesignIconProvider Kind=SettingOutlined}"
+                                IconHeight="24"
+                                IconWidth="24"
+                                VerticalAlignment="Center"
+                                atom:ToolTip.Tip="设置 Domain annotation 位置"
+                                x:Name="DomainAnnotationSettingsButton" />
+                        </controls:Popover.Trigger>
+                        <StackPanel Spacing="10" Width="280">
+                            <TextBlock FontSize="14" FontWeight="SemiBold" Text="Domain annotation 设置" />
+                            <TextBlock
+                                Foreground="#FF64748B"
+                                Text="设置 Domain annotation 距离页面左上角的位置（像素）"
+                                TextWrapping="Wrap" />
+                            <Grid
+                                ColumnDefinitions="Auto,120"
+                                RowDefinitions="Auto,Auto"
+                                RowSpacing="8">
+                                <TextBlock
+                                    Grid.Row="0"
+                                    Text="水平方向："
+                                    VerticalAlignment="Center" />
+                                <atom:NumericUpDown
+                                    Grid.Column="1"
+                                    Grid.Row="0"
+                                    Increment="1"
+                                    Maximum="1000"
+                                    Minimum="0"
+                                    Value="8"
+                                    ValueChanged="OnDomainAnnotationSettingChanged"
+                                    Width="100"
+                                    x:Name="DomainAnnotationHorizontalOffsetInput" />
+                                <TextBlock
+                                    Grid.Row="1"
+                                    Text="垂直方向："
+                                    VerticalAlignment="Center" />
+                                <atom:NumericUpDown
+                                    Grid.Column="1"
+                                    Grid.Row="1"
+                                    Increment="1"
+                                    Maximum="1000"
+                                    Minimum="0"
+                                    Value="8"
+                                    ValueChanged="OnDomainAnnotationSettingChanged"
+                                    Width="100"
+                                    x:Name="DomainAnnotationVerticalOffsetInput" />
+                            </Grid>
+                            <StackPanel Orientation="Horizontal" Spacing="8">
+                                <TextBlock Text="语言：" VerticalAlignment="Center" />
+                                <atom:ToggleSwitch
+                                    IsChecked="{Binding Language, Mode=OneWay}"
+                                    IsCheckedChanged="OnDomainAnnotationSettingChanged"
+                                    OffContent="en"
+                                    OnContent="zh"
+                                    VerticalAlignment="Center"
+                                    x:Name="LanguageToggleSwitch" />
+                            </StackPanel>
+                            <StackPanel Spacing="4">
+                                <atom:CheckBox
+                                    Content="允许编辑 PDF 注释（文本、大小和样式）"
+                                    IsChecked="False"
+                                    IsCheckedChanged="OnDomainAnnotationSettingChanged"
+                                    x:Name="PdfAnnotationEditingCheckBox" />
+                                <TextBlock
+                                    FontSize="12"
+                                    Foreground="#FF64748B"
+                                    Margin="24,0,0,0"
+                                    Text="关闭后仍可选择和拖动注释位置。" />
+                            </StackPanel>
+                        </StackPanel>
+                    </controls:Popover>
+                    <Separator Margin="5,0" Width="1" />
+                    <TextBlock
+                        Foreground="#FF64748B"
+                        Text="{Binding Status}"
+                        VerticalAlignment="Center" />
+                </StackPanel>
+                <Border
+                    Background="White"
+                    BorderBrush="#FFE5E5E5"
+                    BorderThickness="1"
+                    ClipToBounds="True"
+                    CornerRadius="22"
+                    Grid.Column="1"
+                    Margin="12,0,0,0"
                     VerticalAlignment="Center"
-                    atom:ToolTip.Tip="设置 Domain annotation 位置"
-                    x:Name="DomainAnnotationSettingsButton" />
-                <Separator Margin="5,0" Width="1" />
-                <TextBlock
-                    Foreground="#FF64748B"
-                    Text="{Binding Status}"
-                    VerticalAlignment="Center" />
-            </StackPanel>
+                    x:Name="ExtractCrfButtonShell">
+                    <controls:ButtonGroupItem x:Name="ExtractCrfButton" Label="CRF 抽取"
+                                              Click="OnExtractCrfButtonClick"
+                                              Icon="{antd-icons:AntDesignIconProvider Kind=HighlightOutlined}" />
+                </Border>
+            </Grid>
         </Border>
         <Border
             Background="#FFF8FAFC"
@@ -79,70 +171,28 @@
         </Border>
 
         <atom:Dialog
-            ButtonClicked="OnDomainAnnotationDialogButtonClicked"
+            ButtonClicked="OnCrfExtractionDialogButtonClicked"
             DefaultStandardButton="Ok"
-            HostMinWidth="360"
+            HostMinWidth="380"
             IsDragMovable="True"
             IsModal="True"
             StandardButtons="Cancel,Ok"
-            x:Name="DomainAnnotationSettingsDialog">
+            Title="CRF 抽取"
+            x:Name="CrfExtractionDialog">
             <StackPanel Spacing="10">
-                <TextBlock Text="设置 Domain annotation 距离页面左上角的位置（像素）" />
-                <Grid
-                    ColumnDefinitions="Auto,120"
-                    RowDefinitions="Auto,Auto"
-                    RowSpacing="8">
-                    <TextBlock
-                        Grid.Row="0"
-                        Text="水平方向："
-                        VerticalAlignment="Center" />
-                    <atom:NumericUpDown
+                <TextBlock Text="从当前打开的 aCRF PDF 抽取表单文本，抽取结果会替换注释表格。" TextWrapping="Wrap" />
+                <Grid ColumnDefinitions="Auto,*">
+                    <TextBlock Text="数据库类型：" VerticalAlignment="Center" />
+                    <atom:ComboBox
                         Grid.Column="1"
-                        Grid.Row="0"
-                        Increment="1"
-                        Maximum="1000"
-                        Minimum="0"
-                        Value="8"
-                        Width="100"
-                        x:Name="DomainAnnotationHorizontalOffsetInput" />
-                    <TextBlock
-                        Grid.Row="1"
-                        Text="垂直方向："
-                        VerticalAlignment="Center" />
-                    <atom:NumericUpDown
-                        Grid.Column="1"
-                        Grid.Row="1"
-                        Increment="1"
-                        Maximum="1000"
-                        Minimum="0"
-                        Value="8"
-                        Width="100"
-                        x:Name="DomainAnnotationVerticalOffsetInput" />
+                        HorizontalAlignment="Stretch"
+                        x:Name="CrfExtractionTypeComboBox" />
                 </Grid>
-                <StackPanel Orientation="Horizontal" Spacing="8">
-                    <TextBlock Text="语言：" VerticalAlignment="Center" />
-                    <atom:ToggleSwitch
-                        IsChecked="{Binding Language, Mode=OneWay}"
-                        OffContent="en"
-                        OnContent="zh"
-                        VerticalAlignment="Center"
-                        x:Name="LanguageToggleSwitch" />
-                </StackPanel>
-                <StackPanel Spacing="4">
-                    <atom:CheckBox
-                        Content="允许编辑 PDF 注释（文本、大小和样式）"
-                        IsChecked="False"
-                        x:Name="PdfAnnotationEditingCheckBox" />
-                    <TextBlock
-                        FontSize="12"
-                        Foreground="#FF64748B"
-                        Margin="24,0,0,0"
-                        Text="关闭后仍可选择和拖动注释位置。" />
-                </StackPanel>
                 <TextBlock
                     Foreground="#FFB91C1C"
                     IsVisible="False"
-                    x:Name="DomainAnnotationSettingsErrorText" />
+                    TextWrapping="Wrap"
+                    x:Name="CrfExtractionErrorText" />
             </StackPanel>
         </atom:Dialog>
     </Grid>

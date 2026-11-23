@@ -1,4 +1,4 @@
-﻿using Avalonia.Media.Imaging;
+using Avalonia.Media.Imaging;
 using System.IO;
 using Avalonia.Media;
 using Avalonia.Layout;
@@ -18,6 +18,9 @@ public partial class PdfViewer : UserControl, IDisposable
 {
     private readonly PdfDocumentLoader _loader = new();
     private readonly List<FreeTextAnnotationModel> _annotations = new();
+    // O(1) lookup for the many id-based updates driven by the annotation table (drag, bulk edit,
+    // colour refresh); a linear scan here made those paths quadratic in the annotation count.
+    private readonly Dictionary<string, FreeTextAnnotationModel> _annotationsById = new(StringComparer.Ordinal);
     private readonly List<PdfPageSlot> _pageSlots = new();
     private readonly List<double> _pageHostTops = new();
     private readonly Dictionary<string, FreeTextAnnotationControl> _annotationControls = new();
@@ -47,11 +50,13 @@ public partial class PdfViewer : UserControl, IDisposable
     public PdfViewer()
     {
         InitializeComponent();
+        InitializePdfTextFeatures();
+        InitializeViewerMotion();
         UpdateZoomLabel();
         // Handle Ctrl+wheel at the tunnel phase so we can consume the event before the
         // ScrollViewer's content presenter turns it into a scroll gesture. This makes
         // Ctrl+wheel zoom trigger reliably regardless of scroll position.
-        AddHandler(PointerWheelChangedEvent, MainScrollViewer_OnPointerWheelChanged, RoutingStrategies.Tunnel);
+        MainScrollViewer.AddHandler(PointerWheelChangedEvent, MainScrollViewer_OnPointerWheelChanged, RoutingStrategies.Tunnel);
         _virtualizeScrollTimer = new DispatcherTimer(DispatcherPriority.Background)
         {
             Interval = TimeSpan.FromMilliseconds(120)
@@ -100,6 +105,8 @@ public partial class PdfViewer : UserControl, IDisposable
         if (_disposed) return;
         if (!File.Exists(filePath)) { SetStatus("File not found."); return; }
         _loadCts?.Cancel();
+        ResetViewerMotion();
+        ResetPdfTextDocument();
         _loadCts = new CancellationTokenSource();
         var token = _loadCts.Token;
         var layoutGen = ++_layoutGeneration;
@@ -122,6 +129,7 @@ public partial class PdfViewer : UserControl, IDisposable
             _currentPdfPath = filePath;
             _annotations.Clear();
             _annotations.AddRange(annotations);
+            RebuildAnnotationIndex();
             _currentPageIndex = 0;
             ReleaseAllPageBitmaps();
             PagesPanel.Children.Clear();
@@ -130,12 +138,13 @@ public partial class PdfViewer : UserControl, IDisposable
             _annotationControls.Clear();
             _selectedAnnotation = null;
             SetLoadUiBusy(true, "正在构建页面…");
+            AttachPdfTextDocument();
             await BuildDocumentLayoutAsync(layoutGen, token);
             token.ThrowIfCancellationRequested();
             DocumentLoaded?.Invoke(this, EventArgs.Empty);
             SetLoadUiBusy(true, "正在渲染页面…");
             await VirtualizeVisiblePagesAsync();
-            MainScrollViewer.Offset = new Vector(MainScrollViewer.Offset.X, 0);
+            SetViewerOffset(new Vector(MainScrollViewer.Offset.X, 0));
             RequestVirtualizationImmediate();
             UpdatePageInfo();
             SetStatus($"Loaded: {Path.GetFileName(filePath)}, {_loader.PageCount} pages, {_annotations.Count} annotations.");
@@ -179,75 +188,60 @@ public partial class PdfViewer : UserControl, IDisposable
         }, DispatcherPriority.Background);
     }
 
-    public bool SaveAnnotations(string? dest, out string? error)
+    /// <summary>
+    /// Folds live editor state into the models and writes the PDF on a background thread, so saving a
+    /// large document no longer freezes the window. Models are cloned before the background work starts,
+    /// so edits made while the save runs cannot race with (or leak into) the file being written.
+    /// </summary>
+    public async Task<(bool Success, string? Error)> SaveAnnotationsAsync(string? dest, bool flatten = false)
     {
-        error = null;
         if (string.IsNullOrEmpty(_currentPdfPath))
         {
-            error = "Please open a PDF first.";
-            SetStatus(error);
-            return false;
+            const string notOpen = "Please open a PDF first.";
+            SetStatus(notOpen);
+            return (false, notOpen);
         }
 
-        var target = dest ?? _currentPdfPath;
+        var source = _currentPdfPath;
+        var target = dest ?? source;
+        var action = flatten ? "Flatten save" : "Save";
         try
         {
+            // UI thread: commit the editors' current text/geometry, then snapshot the models.
             SyncAllAnnotationModelsFromUi();
             var exportAnnotations = _annotations
                 .Concat(GetDomainAnnotationModels())
+                .Select(annotation => annotation.Clone())
                 .ToList();
-            PdfAnnotationService.SaveFreeTextAnnotations(_currentPdfPath, target, exportAnnotations);
+
+            SetStatus(flatten ? "Saving flattened PDF…" : "Saving PDF…");
+            await Task.Run(() =>
+            {
+                if (flatten)
+                    PdfAnnotationService.SaveFreeTextAnnotationsFlattened(source, target, exportAnnotations);
+                else
+                    PdfAnnotationService.SaveFreeTextAnnotations(source, target, exportAnnotations);
+            });
+
             if (!File.Exists(target) || new FileInfo(target).Length == 0)
             {
-                error = $"Save failed: output file was not created: {target}";
-                SetStatus(error);
-                return false;
+                var missing = $"{action} failed: output file was not created: {target}";
+                SetStatus(missing);
+                return (false, missing);
             }
 
-            SetStatus(!string.Equals(target, _currentPdfPath, StringComparison.OrdinalIgnoreCase)
-                ? $"Saved to: {target}" : "Annotations saved.");
-            return true;
+            SetStatus(flatten
+                ? $"Flattened PDF saved to: {target}"
+                : string.Equals(target, source, StringComparison.OrdinalIgnoreCase)
+                    ? "Annotations saved."
+                    : $"Saved to: {target}");
+            return (true, null);
         }
         catch (Exception ex)
         {
-            error = $"Save failed: {ex.Message}";
+            var error = $"{action} failed: {ex.Message}";
             SetStatus(error);
-            return false;
-        }
-    }
-
-    public bool SaveAnnotationsFlattened(string dest, out string? error)
-    {
-        error = null;
-        if (string.IsNullOrEmpty(_currentPdfPath))
-        {
-            error = "Please open a PDF first.";
-            SetStatus(error);
-            return false;
-        }
-
-        try
-        {
-            SyncAllAnnotationModelsFromUi();
-            var exportAnnotations = _annotations
-                .Concat(GetDomainAnnotationModels())
-                .ToList();
-            PdfAnnotationService.SaveFreeTextAnnotationsFlattened(_currentPdfPath, dest, exportAnnotations);
-            if (!File.Exists(dest) || new FileInfo(dest).Length == 0)
-            {
-                error = $"Flatten save failed: output file was not created: {dest}";
-                SetStatus(error);
-                return false;
-            }
-
-            SetStatus($"Flattened PDF saved to: {dest}");
-            return true;
-        }
-        catch (Exception ex)
-        {
-            error = $"Flatten save failed: {ex.Message}";
-            SetStatus(error);
-            return false;
+            return (false, error);
         }
     }
 
@@ -296,6 +290,12 @@ public partial class PdfViewer : UserControl, IDisposable
             {
                 pageImage.Width = ps.Width;
                 pageImage.Height = ps.Height;
+            }
+            if (slot.TextOverlay is { } textOverlay)
+            {
+                textOverlay.Width = ps.Width;
+                textOverlay.Height = ps.Height;
+                textOverlay.InvalidateVisual();
             }
             if (slot.AnnotationLayer is { } annotationLayer)
             {
@@ -371,10 +371,11 @@ public partial class PdfViewer : UserControl, IDisposable
             Width = ps.Width + 2,
             Height = ps.Height + 2,
             HorizontalAlignment = HorizontalAlignment.Center,
-            Margin = new Thickness(0, 0, 0, 4),
+            Margin = new Thickness(0, 0, 0, 16),
             Background = Brushes.White,
-            BorderBrush = new SolidColorBrush(Color.Parse("#D1D5DB")),
-            BorderThickness = new Thickness(1)
+            BorderBrush = new SolidColorBrush(Color.Parse("#DEDEDE")),
+            BorderThickness = new Thickness(1),
+            BoxShadow = BoxShadows.Parse("0 1 4 0 #0F000000")
         };
         PagesPanel.Children.Add(host);
         var top = _pageHostTops.Count == 0
@@ -403,6 +404,14 @@ public partial class PdfViewer : UserControl, IDisposable
             IsHitTestVisible = false
         };
         pageRoot.Children.Add(loadingOverlay);
+        var textOverlay = new PdfTextOverlay(this, slot.PageIndex)
+        {
+            Width = ps.Width, Height = ps.Height, IsHitTestVisible = false, ZIndex = 1
+        };
+        pageRoot.Children.Add(textOverlay);
+        slot.TextOverlay = textOverlay;
+        _textOverlays.Add(textOverlay);
+        RequestPdfPageText(slot.PageIndex);
         var domainLayer = new Canvas
         {
             Width = ps.Width,
@@ -458,6 +467,8 @@ public partial class PdfViewer : UserControl, IDisposable
         if (_selectedAnnotation?.Model?.PageIndex == slot.PageIndex)
             _selectedAnnotation = null;
         ReleasePageBitmap(slot);
+        if (slot.TextOverlay is { } textOverlay) _textOverlays.Remove(textOverlay);
+        slot.TextOverlay = null;
         slot.Host.Child = null;
         slot.PageRoot = null;
         slot.PageImage = null;
@@ -551,6 +562,8 @@ public partial class PdfViewer : UserControl, IDisposable
         var vis = GetVisiblePageRange(ViewportPageBuffer);
         foreach (var pageIndex in vis)
             MountPageContent(_pageSlots[pageIndex]);
+        // Reuse the previous frame throughout the zoom; render only at the settled scale.
+        if (_zoomMotion.IsAnimating) return;
         var ordered = vis.OrderBy(i => Math.Abs(i - _currentPageIndex)).ThenBy(i => i).ToList();
         if (ordered.Count == 0) return;
         foreach (var pageIndex in ordered)
@@ -610,11 +623,6 @@ public partial class PdfViewer : UserControl, IDisposable
             first = last = Math.Clamp(_currentPageIndex, 0, _pageSlots.Count - 1);
         var s = Math.Max(0, first - buf);
         var e = Math.Min(_pageSlots.Count - 1, last + buf);
-        var current = Math.Clamp(_currentPageIndex, 0, _pageSlots.Count - 1);
-        s = Math.Min(s, Math.Max(0, current - buf));
-        e = Math.Max(e, Math.Min(_pageSlots.Count - 1, current + buf));
-
-
         return (s, e);
     }
 
@@ -724,11 +732,32 @@ public partial class PdfViewer : UserControl, IDisposable
     }
 
     private void SyncAllAnnotationModelsFromUi() { foreach (var s in _pageSlots) if (s.AnnotationLayer is { } layer) foreach (var c in layer.Children.OfType<FreeTextAnnotationControl>().ToList()) CommitAnnotationFromControl(c); }
-    private void RemoveAnnotation(string id) { _annotations.RemoveAll(a => a.Id == id); if (_annotationControls.Remove(id, out var c)) { var l = _pageSlots.Select(s => s.AnnotationLayer).OfType<PageAnnotationCanvas>().FirstOrDefault(x => x.Children.Contains(c)); l?.UnhookAnnotation(c); l?.Children.Remove(c); } if (_selectedAnnotation?.Model?.Id == id) _selectedAnnotation = null; }
+
+    private void RebuildAnnotationIndex()
+    {
+        _annotationsById.Clear();
+        foreach (var model in _annotations)
+            _annotationsById[model.Id] = model;
+    }
+
+    private void RemoveAnnotation(string id)
+    {
+        if (_annotationsById.Remove(id, out var removed))
+            _annotations.Remove(removed);
+        if (_annotationControls.Remove(id, out var control))
+        {
+            var layer = _pageSlots.Select(s => s.AnnotationLayer).OfType<PageAnnotationCanvas>()
+                .FirstOrDefault(x => x.Children.Contains(control));
+            layer?.UnhookAnnotation(control);
+            layer?.Children.Remove(control);
+        }
+        if (_selectedAnnotation?.Model?.Id == id) _selectedAnnotation = null;
+    }
     private void OnAnnotationIsSelectedChanged(FreeTextAnnotationControl c)
     {
         if (c.IsSelected)
         {
+            _pdfTextSelection?.Clear();
             if (_selectedAnnotation != c)
             {
                 if (_selectedAnnotation != null) _selectedAnnotation.IsSelected = false;
@@ -802,6 +831,14 @@ public partial class PdfViewer : UserControl, IDisposable
     private void UpdateCurrentPageIndexFromViewport()
     {
         if (_pageSlots.Count == 0) return;
+        // Keep the requested page current while travelling and at the destination, including
+        // short/last pages that cannot reach the viewport centre. Direct input releases the hold.
+        if (_navigationOffset is { } target)
+        {
+            var distance = MainScrollViewer.Offset - target;
+            if (IsViewerScrollAnimating || (Math.Abs(distance.X) <= 0.5 && Math.Abs(distance.Y) <= 0.5)) return;
+            _navigationOffset = null;
+        }
         var viewportCenter = MainScrollViewer.Offset.Y + MainScrollViewer.Bounds.Height / 2;
         var pageIndex = UpperBoundPageHostTop(viewportCenter) - 1;
         var best = Math.Clamp(pageIndex, 0, _pageSlots.Count - 1);
@@ -814,7 +851,7 @@ public partial class PdfViewer : UserControl, IDisposable
         return host.Height + host.Margin.Top + host.Margin.Bottom;
 
     }
-    private void ScrollToPage(int pi) { if (pi < 0 || pi >= PagesPanel.Children.Count) return; var top = GetPageHostTop(pi); MainScrollViewer.Offset = new Vector(MainScrollViewer.Offset.X, Math.Max(0, top - 8)); }
+    private void ScrollToPage(int pi) { if (pi < 0 || pi >= PagesPanel.Children.Count) return; var top = GetPageHostTop(pi); AnimateViewerScrollTo(new Vector(MainScrollViewer.Offset.X, Math.Max(0, top - 8))); }
     private void UpdateZoomLabel()
     {
         if (ZoomComboBox != null && ZoomSlider != null)
@@ -902,6 +939,10 @@ public partial class PdfViewer : UserControl, IDisposable
     {
         if (_disposed) return;
         _disposed = true;
+        ResetViewerMotion();
+        ResetPdfTextDocument();
+        _pdfSearchDebounce?.Stop();
+        _pdfSelectionScrollTimer?.Stop();
         ++_renderGeneration;
         ++_layoutGeneration;
         _loadCts?.Cancel();

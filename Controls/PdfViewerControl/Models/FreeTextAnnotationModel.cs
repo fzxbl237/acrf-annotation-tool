@@ -18,7 +18,7 @@ public sealed class FreeTextAnnotationModel
     public string CalloutShape { get; set; } = string.Empty;
     public double CalloutWidth { get; set; } = 40;
     public string EffectiveCalloutShape => CalloutShape is "LeftBracket" or "RightBracket" or "TopBracket" or "BottomBracket" or "OpenArrow" or "Rectangle"
-        ? CalloutShape : CalloutIsLeft ? "LeftBracket" : "RightBracket";
+        ? CalloutShape : "OpenArrow";
 
     // All points are in PDF coordinates. The UI and PDF export share this geometry.
     public (Avalonia.Point Start, Avalonia.Point Anchor, Avalonia.Point[] Tail) GetCalloutGeometry()

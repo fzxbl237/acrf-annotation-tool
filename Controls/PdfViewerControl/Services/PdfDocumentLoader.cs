@@ -3,6 +3,7 @@ using System.IO;
 using System.Runtime.InteropServices;
 using Avalonia;
 using Avalonia.Media.Imaging;
+using PdfViewerControl.Text;
 
 namespace PdfViewerControl.Services;
 
@@ -12,6 +13,8 @@ public sealed class PdfDocumentLoader : IDisposable
     private readonly Docnet.Core.DocLib _docLib = Docnet.Core.DocLib.Instance;
     private byte[]? _pdfBytes;
     private Docnet.Core.Readers.IDocReader? _reader;
+    private Docnet.Core.Readers.IDocReader? _textReader;
+    private int _documentVersion;
     private double _readerScaleFactor;
     private List<Size> _pageSizesInPoints = new();
     private double _scaleFactor = 96.0 / 72.0;
@@ -24,6 +27,7 @@ public sealed class PdfDocumentLoader : IDisposable
     public double ScaleFactor => _scaleFactor;
     public double DpiScale => _dpiScale;
     public double DisplayScale => _scaleFactor / _dpiScale;
+    public int DocumentVersion { get { lock (_readerLock) return _documentVersion; } }
 
     public void Load(string filePath, double zoom = 1.0, double dpiScale = 1.0)
     {
@@ -125,6 +129,53 @@ public sealed class PdfDocumentLoader : IDisposable
 
     public WriteableBitmap RenderPage(int pageIndex) => TryRenderPage(pageIndex) ?? CreateErrorPlaceholder(pageIndex);
 
+    // Text has its own fixed-resolution reader, so zooming never invalidates character geometry
+    // or repeatedly reopens the bitmap reader during a document-wide search.
+    internal Task<PdfPageText> ReadPageTextAsync(int pageIndex, int documentVersion, CancellationToken token) => Task.Run(() =>
+    {
+        lock (_readerLock)
+        {
+            token.ThrowIfCancellationRequested();
+            if (_disposed || documentVersion != _documentVersion)
+                throw new OperationCanceledException("The PDF document has changed.", token);
+            if (_pdfBytes == null || pageIndex < 0 || pageIndex >= PageCount)
+                return new PdfPageText(string.Empty, []);
+            _textReader ??= _docLib.GetDocReader(_pdfBytes, new Docnet.Core.Models.PageDimensions(2.0));
+            using var page = _textReader.GetPageReader(pageIndex);
+            // This PDFium build emits U+FFFE for a line-end hyphen. Use the text algorithms'
+            // marker without changing UTF-16 offsets; U+FFFE cannot pass .NET normalization.
+            var text = page.GetText().Replace('\uFFFE', '\u0002');
+            var boxes = new Rect[text.Length];
+            var sx = _pageSizesInPoints[pageIndex].Width / Math.Max(1, page.GetPageWidth());
+            var sy = _pageSizesInPoints[pageIndex].Height / Math.Max(1, page.GetPageHeight());
+            var at = 0;
+            foreach (var character in page.GetCharacters())
+            {
+                token.ThrowIfCancellationRequested();
+                // Docnet exposes one char per PDFium code point and can omit characters with no box.
+                // Keep the full UTF-16 text (including line breaks and supplementary characters).
+                var found = at;
+                while (found < text.Length && !MatchesCharacter(text, found, character.Char))
+                    found += char.IsSurrogatePair(text, found) ? 2 : 1;
+                if (found == text.Length) continue;
+                at = found;
+                var units = char.IsSurrogatePair(text, at) ? 2 : 1;
+                var box = character.Box;
+                var rect = text[at] is '\r' or '\n' ? default : new Rect(
+                    Math.Min(box.Left, box.Right) * sx, Math.Min(box.Top, box.Bottom) * sy,
+                    Math.Abs(box.Right - box.Left) * sx, Math.Abs(box.Bottom - box.Top) * sy);
+                for (var i = 0; i < units; i++) boxes[at + i] = rect;
+                at += units;
+            }
+            return new PdfPageText(text, boxes);
+        }
+    }, token);
+
+    private static bool MatchesCharacter(string text, int index, char character) =>
+        text[index] == character || (text[index] == '\u0002' && character == '\uFFFE') ||
+        (char.IsSurrogatePair(text, index) &&
+            unchecked((char)char.ConvertToUtf32(text, index)) == character);
+
     public void Dispose()
     {
         lock (_readerLock)
@@ -224,6 +275,9 @@ public sealed class PdfDocumentLoader : IDisposable
 
     private void DisposeReaderUnsafe()
     {
+        ++_documentVersion;
+        _textReader?.Dispose();
+        _textReader = null;
         _reader?.Dispose();
         _reader = null;
         _readerScaleFactor = 0;

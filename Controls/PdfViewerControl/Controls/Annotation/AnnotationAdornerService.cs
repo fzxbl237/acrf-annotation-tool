@@ -16,33 +16,183 @@ internal static class AnnotationAdornerService
 {
     private static readonly Dictionary<FreeTextAnnotationControl, AnnotationOverlay> _overlays = new();
     private static readonly Dictionary<FreeTextAnnotationControl, bool> _pointerOver = new();
-    // Last highlighted overlay per page canvas, so the frame can travel from it to the next target.
-    // The overlay is stored, not a rect, because the frame keeps moving while the spring runs.
-    private static readonly Dictionary<Canvas, AnnotationOverlay> _lastHighlights = new();
+    // The frame currently shown on each page canvas (hover or selection); the next highlight travels from it.
+    private static readonly Dictionary<Canvas, AnnotationOverlay> _lastFrames = new();
+    // The frame highlighted immediately before the current one. Only the very first selection on a canvas
+    // uses it as a fallback; later clicks spring from the last selected annotation instead.
+    private static readonly Dictionary<Canvas, AnnotationOverlay> _previousFrames = new();
+    // Where the last selected annotation sits. A click always springs from here, so hovering another
+    // annotation on the way (click A, hover B, click C) still travels A -> C instead of B -> C.
+    private static readonly Dictionary<Canvas, Rect> _lastSelectedRects = new();
+    // Which control _lastSelectedRects belongs to; an older selection's fade-out completion must not
+    // overwrite the newer selection's origin.
+    private static readonly Dictionary<Canvas, FreeTextAnnotationControl> _lastSelectedControls = new();
 
-    public static void SetSelected(FreeTextAnnotationControl c, bool s) => UpdateAdornerState(c);
+    public static void SetSelected(FreeTextAnnotationControl c, bool s)
+    {
+        if (s) SelectWithTravel(c);
+        else UpdateAdornerState(c);
+    }
     internal static bool IsHighlighted(FreeTextAnnotationControl c) => c.IsSelected || _pointerOver.GetValueOrDefault(c);
     public static void UpdateAdornerState(FreeTextAnnotationControl c) { if (IsHighlighted(c)) EnsureVisible(c); else Hide(c); }
     public static void SetPointerOver(FreeTextAnnotationControl c, bool o) { if (o) _pointerOver[c] = true; else _pointerOver.Remove(c); UpdateAdornerState(c); }
-    public static void Refresh(FreeTextAnnotationControl c) { if (c.IsSelected) EnsureVisible(c); }
-    public static void RebindSelectedAdorner(FreeTextAnnotationControl c) => Refresh(c);
+    public static void Refresh(FreeTextAnnotationControl c)
+    {
+        if (!c.IsSelected) return;
+        RefreshSelection(c);
+    }
+    public static void RebindSelectedAdorner(FreeTextAnnotationControl c) { if (c.IsSelected) RefreshSelection(c); }
     public static void SyncAdornerLayerPosition(FreeTextAnnotationControl c) { PlaceOverlay(c); }
     public static void SyncAdornerPosition(FreeTextAnnotationControl c) { PlaceOverlay(c); }
+
+    /// <summary>
+    /// A relayout (zoom, resize commit) moved the selected box. Keep the frame on it without replaying
+    /// the selection spring, which is only for a real hand-over to another annotation.
+    /// </summary>
+    private static void RefreshSelection(FreeTextAnnotationControl c)
+    {
+        if (_overlays.TryGetValue(c, out var overlay))
+        {
+            overlay.RefreshHighlight(c);
+            RememberFrame(c, overlay);
+            // The selected box may have moved (zoom, resize); keep the next click's origin in step.
+            if (c.Parent is Canvas parent) RememberSelection(c, parent, overlay.FrameRect);
+            return;
+        }
+        SelectWithTravel(c);
+    }
+
+    /// <summary>
+    /// Selection travels from the annotation selected before it. Hovering another annotation on the way
+    /// must not become the departure point: click A, hover B, click C springs from A to C. The frame on
+    /// the clicked annotation is closed with a fade (not yanked), and the new selection frame shows its
+    /// chrome once it lands.
+    /// </summary>
+    private static void SelectWithTravel(FreeTextAnnotationControl c)
+    {
+        if (!c.IsLoaded) { c.AttachedToVisualTree += (_, _) => { if (c.IsSelected) SelectWithTravel(c); }; return; }
+        if (c.Parent is not Canvas parent || !parent.IsAttachedToVisualTree()) { UpdateAdornerState(c); return; }
+
+        var existing = _overlays.TryGetValue(c, out var found) ? found : null;
+        var target = AnnotationOverlay.GetFrameRect(c);
+
+        var hasPreviousSelection = _lastSelectedRects.TryGetValue(parent, out var previousSelectionRect);
+        AnnotationOverlay? hoverOrigin = null;
+        if (!hasPreviousSelection)
+        {
+            // First selection on this canvas: fall back to the hover frame that is already there.
+            if (existing is not null)
+                _previousFrames.TryGetValue(parent, out hoverOrigin);
+            if (hoverOrigin is null && _lastFrames.TryGetValue(parent, out var current) && !ReferenceEquals(current, existing))
+                hoverOrigin = current;
+            if (ReferenceEquals(hoverOrigin, existing)) hoverOrigin = null;
+        }
+
+        var startRect = hasPreviousSelection ? previousSelectionRect : hoverOrigin?.FrameRect;
+        if (startRect is not { } fromRect)
+        {
+            if (existing is not null)
+            {
+                // Nothing to travel from: pick the selection chrome up where the hover frame already is.
+                existing.RefreshHighlight(c);
+                _lastFrames[parent] = existing;
+                RememberSelection(c, parent, target);
+                return;
+            }
+
+            var created = new AnnotationOverlay { Opacity = 0 };
+            parent.Children.Add(created);
+            _overlays[c] = created;
+            created.UpdatePosition(c);
+            _lastFrames[parent] = created;
+            RememberSelection(c, parent, target);
+            Dispatcher.UIThread.Post(() =>
+            {
+                if (_overlays.TryGetValue(c, out var now) && ReferenceEquals(now, created)) created.ShowHighlight(c);
+            }, DispatcherPriority.Render);
+            return;
+        }
+
+        // Close instead of removing: the hover frame on the clicked annotation fades out (the previous
+        // selection frame fades through its normal deselect path), while a fresh frame springs across.
+        if (existing is not null) FadeOutOverlay(existing);
+        if (hoverOrigin is not null) FadeOutOverlay(hoverOrigin);
+
+        var traveler = new AnnotationOverlay { Opacity = 1 };
+        parent.Children.Add(traveler);
+        _overlays[c] = traveler;
+        _lastFrames[parent] = traveler;
+        RememberSelection(c, parent, target);
+        traveler.AnimateFrom(c, fromRect);
+    }
+
+    /// <summary>Remember the box the next selection should spring from.</summary>
+    private static void RememberSelection(FreeTextAnnotationControl c, Canvas parent, Rect rect)
+    {
+        _lastSelectedControls[parent] = c;
+        _lastSelectedRects[parent] = rect;
+    }
+
+    /// <summary>Fade an overlay out and remove its visual when the fade has finished.</summary>
+    private static void FadeOutOverlay(AnnotationOverlay overlay)
+    {
+        DropOverlayFor(overlay);
+        if (overlay.Parent is Canvas canvas)
+        {
+            if (_lastFrames.TryGetValue(canvas, out var frame) && ReferenceEquals(frame, overlay))
+                _lastFrames.Remove(canvas);
+            if (_previousFrames.TryGetValue(canvas, out var previous) && ReferenceEquals(previous, overlay))
+                _previousFrames.Remove(canvas);
+        }
+        overlay.FadeOut(() =>
+        {
+            if (overlay.Parent is Canvas parent)
+            {
+                try { parent.Children.Remove(overlay); } catch (InvalidOperationException) { }
+            }
+        });
+    }
+
+    /// <summary>Retire an overlay completely: its bookkeeping entry and its visual.</summary>
+    private static void DropOverlay(AnnotationOverlay overlay)
+    {
+        DropOverlayFor(overlay);
+        overlay.CancelFade();
+        if (overlay.Parent is Canvas canvas)
+        {
+            if (_lastFrames.TryGetValue(canvas, out var current) && ReferenceEquals(current, overlay))
+                _lastFrames.Remove(canvas);
+            // Keep _previousFrames: it is the departure rect a click replays from.
+            try { canvas.Children.Remove(overlay); } catch (InvalidOperationException) { }
+        }
+    }
 
     private static void PlaceOverlay(FreeTextAnnotationControl c)
     {
         if (!_overlays.TryGetValue(c, out var o)) return;
         o.UpdatePosition(c);
-        RememberRect(c, o);
+        RememberFrame(c, o);
+        // A drag/resize moved the selected box; the next click must spring from its new position.
+        if (c.IsSelected && c.Parent is Canvas parent) RememberSelection(c, parent, o.FrameRect);
     }
 
-    private static void RememberRect(FreeTextAnnotationControl c, AnnotationOverlay o)
+    private static void RememberFrame(FreeTextAnnotationControl c, AnnotationOverlay o)
     {
-        if (c.Parent is Canvas parent)
-            _lastHighlights[parent] = o;
+        if (c.Parent is not Canvas parent) return;
+        _lastFrames[parent] = o;
     }
 
-    private static FreeTextAnnotationControl? FindOwner(AnnotationOverlay overlay)
+    /// <summary>Forget the ownership entry of an overlay that is being retired.</summary>
+    private static void DropOverlayFor(AnnotationOverlay overlay)
+    {
+        List<FreeTextAnnotationControl>? keys = null;
+        foreach (var pair in _overlays)
+            if (ReferenceEquals(pair.Value, overlay)) (keys ??= new List<FreeTextAnnotationControl>()).Add(pair.Key);
+        if (keys is null) return;
+        foreach (var key in keys) _overlays.Remove(key);
+    }
+
+    private static FreeTextAnnotationControl? OwnerOf(AnnotationOverlay overlay)
     {
         foreach (var pair in _overlays)
             if (ReferenceEquals(pair.Value, overlay)) return pair.Key;
@@ -89,6 +239,7 @@ internal static class AnnotationAdornerService
         TryCreate(c);
     }
 
+    /// <summary>Create or refresh the hover highlight. Hover travels from the frame already on the canvas.</summary>
     private static void TryCreate(FreeTextAnnotationControl c)
     {
         if (c.Parent is not Canvas parent) return;
@@ -96,22 +247,24 @@ internal static class AnnotationAdornerService
         if (_overlays.TryGetValue(c, out var ex))
         {
             ex.RefreshHighlight(c);
-            RememberRect(c, ex);
+            RememberFrame(c, ex);
             return;
         }
 
-        // The travelling frame appears instantly; only a highlight with no predecessor fades in.
-        var travels = _lastHighlights.TryGetValue(parent, out var previous);
-        var o = travels ? new AnnotationOverlay() : new AnnotationOverlay { Opacity = 0 };
+        _lastFrames.TryGetValue(parent, out var previous);
+        if (previous is not null && !ReferenceEquals(previous.Parent, parent)) previous = null;
+        if (previous is null) _previousFrames.Remove(parent);
+
+        var o = new AnnotationOverlay { Opacity = 0 };
         parent.Children.Add(o);
         _overlays[c] = o;
-        if (travels && previous != null)
+        if (previous is not null)
         {
-            // Travel from where the previous highlight currently sits, matching the DataGrid
-            // selection spring. Reading it live also continues a spring that is still running.
+            _previousFrames[parent] = previous;
             var start = previous.FrameRect;
-            var owner = FindOwner(previous);
-            if (owner != null && !IsHighlighted(owner)) RemoveNow(owner);
+            var owner = OwnerOf(previous);
+            // A hover frame on the annotation being left is replaced by this one; a selected frame stays.
+            if (owner is not null && !IsHighlighted(owner)) DropOverlay(previous);
             o.AnimateFrom(c, start);
             o.ShowHighlight(c);
         }
@@ -123,7 +276,7 @@ internal static class AnnotationAdornerService
                 if (_overlays.TryGetValue(c, out var current) && ReferenceEquals(current, o)) o.ShowHighlight(c);
             }, DispatcherPriority.Render);
         }
-        RememberRect(c, o);
+        RememberFrame(c, o);
     }
 
     private static void Hide(FreeTextAnnotationControl c)
@@ -132,12 +285,19 @@ internal static class AnnotationAdornerService
         // Fade out first; the overlay leaves the tree once the animation has finished.
         o.FadeOut(() =>
         {
-            if (_overlays.TryGetValue(c, out var current) && !ReferenceEquals(current, o)) return;
+            // Dropped or handed over to another annotation while the fade ran: leave it alone.
+            if (!_overlays.TryGetValue(c, out var current) || !ReferenceEquals(current, o)) return;
             _overlays.Remove(c);
             if (o.Parent is Canvas p)
             {
-                if (_lastHighlights.TryGetValue(p, out var remembered) && ReferenceEquals(remembered, o))
-                    _lastHighlights.Remove(p);
+                if (_lastFrames.TryGetValue(p, out var frame) && ReferenceEquals(frame, o))
+                    _lastFrames.Remove(p);
+                if (_previousFrames.TryGetValue(p, out var previous) && ReferenceEquals(previous, o))
+                    _previousFrames.Remove(p);
+                // Keep the rect as the next selection's origin, but never let an older selection
+                // overwrite the origin of the one that replaced it.
+                if (o.WasSelection && _lastSelectedControls.TryGetValue(p, out var selected) && ReferenceEquals(selected, c))
+                    _lastSelectedRects[p] = o.FrameRect;
                 try { p.Children.Remove(o); } catch (InvalidOperationException) { }
             }
         });
@@ -150,8 +310,16 @@ internal static class AnnotationAdornerService
         o.CancelFade();
         if (o.Parent is Canvas p)
         {
-            if (_lastHighlights.TryGetValue(p, out var remembered) && ReferenceEquals(remembered, o))
-                _lastHighlights.Remove(p);
+            if (_lastFrames.TryGetValue(p, out var frame) && ReferenceEquals(frame, o))
+                _lastFrames.Remove(p);
+            if (_previousFrames.TryGetValue(p, out var previous) && ReferenceEquals(previous, o))
+                _previousFrames.Remove(p);
+            if (_lastSelectedControls.TryGetValue(p, out var selected) && ReferenceEquals(selected, c))
+            {
+                // The annotation is gone; its box must not become a travel origin later.
+                _lastSelectedControls.Remove(p);
+                _lastSelectedRects.Remove(p);
+            }
             try { p.Children.Remove(o); } catch (InvalidOperationException) { }
         }
     }
@@ -191,7 +359,10 @@ internal static class AnnotationAdornerService
             foreach (var c in pointerKeys)
                 _pointerOver.Remove(c);
         }
-        _lastHighlights.Remove(canvas);
+        _lastFrames.Remove(canvas);
+        _previousFrames.Remove(canvas);
+        _lastSelectedRects.Remove(canvas);
+        _lastSelectedControls.Remove(canvas);
     }
 
     /// <summary>Clear all overlay references without modifying visual tree (safe to call during detach).</summary>
@@ -199,7 +370,10 @@ internal static class AnnotationAdornerService
     {
         _overlays.Clear();
         _pointerOver.Clear();
-        _lastHighlights.Clear();
+        _lastFrames.Clear();
+        _previousFrames.Clear();
+        _lastSelectedRects.Clear();
+        _lastSelectedControls.Clear();
     }
 }
 
@@ -210,6 +384,7 @@ internal sealed class AnnotationOverlay : Canvas
     // Handles live on this frame, so the gap is shared with the resize hit-test.
     private const double FocusGap = AnnotationHandleGeometry.Pad;
     private readonly Border _selBorder;
+    private static readonly IBrush HighlightBackground = new SolidColorBrush(Color.Parse("#18F44336"));
     private readonly Ellipse[] _handles = new Ellipse[8];
     private const double HandleDiameter = 12;
     private static readonly TimeSpan HighlightFadeDuration = TimeSpan.FromMilliseconds(140);
@@ -223,6 +398,12 @@ internal sealed class AnnotationOverlay : Canvas
     private readonly DispatcherTimer _motionTimer = new() { Interval = TimeSpan.FromMilliseconds(16) };
     private long _lastMotionTick;
     private bool _showSelection;
+    // True from the moment a selection hand-over starts until the frame lands, so the selection
+    // chrome is gone for the whole trip and only reappears on the annotation it arrives at.
+    private bool _traveling;
+    // True while the frame carries the selection chrome; a faded selection leaves its rect as the next
+    // travel origin, a faded hover frame does not.
+    internal bool WasSelection { get; private set; }
 
     public AnnotationOverlay()
     {
@@ -241,7 +422,7 @@ internal sealed class AnnotationOverlay : Canvas
             StrokeThickness = 1.5,
             RadiusX = 5,
             RadiusY = 5,
-            Fill = new SolidColorBrush(Color.Parse("#144A83C4")),
+            Fill = HighlightBackground,
             IsHitTestVisible = false
         };
         Children.Add(_focusShadow);
@@ -250,7 +431,7 @@ internal sealed class AnnotationOverlay : Canvas
         {
             BorderBrush = new SolidColorBrush(Color.Parse("#FF4A83C4")),
             BorderThickness = new Thickness(1),
-            Background = Brushes.Transparent,
+            Background = HighlightBackground,
             IsHitTestVisible = false
         };
         Children.Add(_selBorder);
@@ -303,7 +484,9 @@ internal sealed class AnnotationOverlay : Canvas
     {
         _fadeTimer.Stop();
         _fadeCompleted = null;
+        _traveling = false;
         _showSelection = c.IsSelected;
+        WasSelection = c.IsSelected;
         ApplyFrame();
         Opacity = 1;
     }
@@ -315,9 +498,10 @@ internal sealed class AnnotationOverlay : Canvas
         _fadeTimer.Stop();
         _fadeCompleted = null;
         _showSelection = c.IsSelected;
-        // Snap only when idle; a running spring keeps its own path.
+        WasSelection = c.IsSelected;
+        // Snap only when idle; a running spring keeps its own path and its own chrome timing.
         if (_motionTimer.IsEnabled) ApplyFrame();
-        else UpdatePosition(c);
+        else { _traveling = false; UpdatePosition(c); }
         Opacity = 1;
     }
 
@@ -325,10 +509,17 @@ internal sealed class AnnotationOverlay : Canvas
     public void UpdatePosition(FreeTextAnnotationControl c)
     {
         CancelMotion();
+        _traveling = false;
         SetTarget(c);
         for (var i = 0; i < 4; i++) { _value[i] = _target[i]; _velocity[i] = 0; }
         ApplyFrame();
     }
+
+    /// <summary>
+    /// Hand the selection over to another annotation: the selection chrome goes away at once, the
+    /// frame springs to the new annotation, and the chrome comes back when the spring lands.
+    /// </summary>
+    public void TravelTo(FreeTextAnnotationControl c) => AnimateFrom(c, FrameRect);
 
     /// <summary>Travel from a previous highlight rect to the annotation with the DataGrid selection spring.</summary>
     public void AnimateFrom(FreeTextAnnotationControl c, Rect start)
@@ -337,12 +528,16 @@ internal sealed class AnnotationOverlay : Canvas
         if (Math.Abs(start.X - _target[0]) < 0.5 && Math.Abs(start.Y - _target[1]) < 0.5 &&
             Math.Abs(start.Width - _target[2]) < 0.5 && Math.Abs(start.Height - _target[3]) < 0.5)
         {
+            // Already there, so there is nothing to travel: the chrome appears straight away.
             for (var i = 0; i < 4; i++) { _value[i] = _target[i]; _velocity[i] = 0; }
+            _traveling = false;
             ApplyFrame();
             return;
         }
         _value[0] = start.X; _value[1] = start.Y; _value[2] = start.Width; _value[3] = start.Height;
         Array.Clear(_velocity);
+        // The chrome disappears here, on the annotation being left, and comes back when this lands.
+        _traveling = true;
         _lastMotionTick = Stopwatch.GetTimestamp();
         ApplyFrame();
         _motionTimer.Start();
@@ -353,6 +548,7 @@ internal sealed class AnnotationOverlay : Canvas
         var rect = GetFrameRect(c);
         _target[0] = rect.X; _target[1] = rect.Y; _target[2] = rect.Width; _target[3] = rect.Height;
         _showSelection = c.IsSelected;
+        WasSelection = c.IsSelected;
     }
 
     private void CancelMotion()
@@ -388,6 +584,7 @@ internal sealed class AnnotationOverlay : Canvas
         {
             for (var i = 0; i < 4; i++) { _value[i] = _target[i]; _velocity[i] = 0; }
             _motionTimer.Stop();
+            _traveling = false;
         }
         ApplyFrame();
     }
@@ -402,7 +599,8 @@ internal sealed class AnnotationOverlay : Canvas
         _focusFrame.Width = w; _focusFrame.Height = h;
 
         // Resize chrome shares the outer frame, so handles sit on the same edge the hit-test uses.
-        var showSelection = _showSelection && !_motionTimer.IsEnabled;
+        // While the frame travels, the chrome is hidden entirely; it comes back where the frame lands.
+        var showSelection = _showSelection && !_traveling && !_motionTimer.IsEnabled;
         // The blue resize border replaces the idle gray frame instead of drawing inside it.
         _focusFrame.IsVisible = !showSelection;
         _selBorder.IsVisible = showSelection;
